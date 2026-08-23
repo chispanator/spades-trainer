@@ -46,8 +46,33 @@ export function isTerminal(st: PlayState): boolean {
   return st.hands[0].length === 0 && st.trick.length === 0;
 }
 
+/**
+ * What one bag really costs, beyond the +1 it scores on the night.
+ *
+ * A bag is worth +1 immediately, but every tenth bag costs 100. Over a game
+ * that works out at -10 per bag on top of the +1, so an overtrick is worth
+ * about -9, not +1. Scoring bags at face value is exactly what makes an engine
+ * hoover up tricks it never needed - it sees free points where a good player
+ * sees a slow leak. The hand score itself stays honest; this correction is
+ * applied only when *judging* a play.
+ *
+ * The adjustment cancels against the real -100 when the penalty does fire, so
+ * every bag is valued the same whether the counter is at 0 or at 9.
+ */
+export const BAG_TRUE_COST = 10;
+
+/**
+ * How much an opponent's point is worth against one of ours. Spades is a race,
+ * so a point they do not score is worth as much as a point we do: setting them
+ * and making our own contract are weighed on the same scale.
+ */
+export const OPPONENT_WEIGHT = 1;
+
 export interface HandOutcome {
+  /** The real score, exactly as it goes on the scoreboard. */
   teamScore: [number, number];
+  /** The score the engine judges by, with bags at their true long-run cost. */
+  teamValue: [number, number];
   teamTricks: [number, number];
   teamBags: [number, number];
   made: [boolean, boolean];
@@ -56,8 +81,10 @@ export interface HandOutcome {
 export function outcomeOf(st: PlayState): HandOutcome {
   const a = scoreTeamHand(TEAM_SEATS[0], st.bids, st.tricksWon, st.bagsBefore[0]);
   const b = scoreTeamHand(TEAM_SEATS[1], st.bids, st.tricksWon, st.bagsBefore[1]);
+  const value = (s: typeof a) => s.score - BAG_TRUE_COST * s.bagsEarned + 100 * s.bagPenalties;
   return {
     teamScore: [a.score, b.score],
+    teamValue: [value(a), value(b)],
     teamTricks: [st.tricksWon[0] + st.tricksWon[2], st.tricksWon[1] + st.tricksWon[3]],
     teamBags: [a.bagsEarned, b.bagsEarned],
     made: [a.madeContract && a.nilResults.every((n) => n.made), b.madeContract && b.nilResults.every((n) => n.made)],
@@ -65,14 +92,12 @@ export function outcomeOf(st: PlayState): HandOutcome {
 }
 
 /**
- * Value of a finished hand from `team`'s point of view, expressed in "points"
- * (a tenth of a spades score point, so one trick is roughly 1.0).
- * Opponent score is weighted slightly below our own so the engine prefers
- * making its own contract over setting theirs, all else equal.
+ * Value of a finished hand from `team`'s point of view, in "points" - a tenth
+ * of a spades score point, so a trick that decides nothing else is about 1.0.
  */
 export function terminalUtility(st: PlayState, team: 0 | 1): number {
   const o = outcomeOf(st);
-  const mine = o.teamScore[team];
-  const theirs = o.teamScore[team === 0 ? 1 : 0];
-  return (mine - 0.75 * theirs) / 10;
+  const mine = o.teamValue[team];
+  const theirs = o.teamValue[team === 0 ? 1 : 0];
+  return (mine - OPPONENT_WEIGHT * theirs) / 10;
 }

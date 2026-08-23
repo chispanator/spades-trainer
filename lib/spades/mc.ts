@@ -1,5 +1,5 @@
 import { Card, RNG, Seat, makeRng, suitOf, teamOf } from './cards';
-import { TrickCard, legalMoves } from './rules';
+import { TrickCard, legalMoves, winningIndex } from './rules';
 import { InfoSet, dealUnseen, emptyVoids } from './inference';
 import { PlayState, applyCard, isTerminal, outcomeOf, terminalUtility } from './playstate';
 import { heuristicChoice } from './policy';
@@ -153,6 +153,16 @@ export interface TrickEstimate {
   distribution: number[];
   nilProb: number;
   samples: number;
+  /**
+   * Average tricks won where the *winning* card was of that suit. This is the
+   * breakdown a player counts in, and it is what makes long side suits look as
+   * weak as they really are: seven diamonds do not produce seven diamond tricks.
+   */
+  bySuit: number[];
+  /** Tricks won by trumping a suit you were out of. A subset of the spade total. */
+  ruffs: number;
+  /** How many cards the hand holds in each suit, for side-by-side comparison. */
+  lengths: number[];
 }
 
 /**
@@ -182,6 +192,8 @@ export function estimateTricks(
 
   const bids = [6, 6, 6, 6];
   const distribution = new Array(14).fill(0);
+  const bySuit = [0, 0, 0, 0];
+  let ruffs = 0;
   let total = 0;
 
   for (let s = 0; s < samples; s++) {
@@ -195,18 +207,51 @@ export function estimateTricks(
       tricksWon: [0, 0, 0, 0],
       bagsBefore: [0, 0],
     };
-    playout(st);
+    ruffs += playoutAttributed(st, seat, bySuit);
     const t = st.tricksWon[seat];
     distribution[t]++;
     total += t;
   }
+
+  const lengths = [0, 0, 0, 0];
+  for (const c of hand) lengths[suitOf(c)]++;
 
   return {
     expected: total / samples,
     distribution: distribution.map((d) => d / samples),
     nilProb: distribution[0] / samples,
     samples,
+    bySuit: bySuit.map((n) => n / samples),
+    ruffs: ruffs / samples,
+    lengths,
   };
+}
+
+/**
+ * Plays a hand out, recording which suit actually won each trick for `seat`.
+ * Returns the number of those tricks that were ruffs.
+ */
+function playoutAttributed(st: PlayState, seat: Seat, bySuit: number[]): number {
+  let ruffs = 0;
+  let guard = 0;
+  while (!isTerminal(st) && guard++ < 64) {
+    const actor = st.turn;
+    const before = st.trick.slice();
+    const card = heuristicChoice(st);
+    applyCard(st, card);
+    // applyCard clears the trick the moment the fourth card lands, so an empty
+    // trick here means the one we just completed has been resolved.
+    if (st.trick.length === 0) {
+      const full: TrickCard[] = [...before, { seat: actor, card }];
+      const winner = full[winningIndex(full)];
+      if (winner.seat === seat) {
+        const winSuit = suitOf(winner.card);
+        bySuit[winSuit]++;
+        if (winSuit === 3 && suitOf(full[0].card) !== 3) ruffs++;
+      }
+    }
+  }
+  return ruffs;
 }
 
 /** Classic hand count, used to put a bid into words alongside the simulation. */

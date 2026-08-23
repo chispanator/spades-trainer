@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { SEAT_NAME, Seat, partnerOf } from '@/lib/spades/cards';
 import { Difficulty, GameState, HUMAN, HandResult } from '@/lib/spades/game';
+import { BAG_TRUE_COST, OPPONENT_WEIGHT } from '@/lib/spades/playstate';
 import { TrickEstimate } from '@/lib/spades/mc';
 
 export function Scoreboard({ game }: { game: GameState }) {
@@ -46,12 +47,15 @@ export function BidPanel({
   estimate,
   onPeek,
   peeked,
+  onCount,
 }: {
   onBid: (bid: number) => void;
   allowNil: boolean;
   estimate: TrickEstimate | null;
   onPeek: () => void;
   peeked: boolean;
+  /** Offered when the player has not already counted this hand. */
+  onCount?: () => void;
 }) {
   return (
     <div className="panel-rise rounded-2xl bg-[#132520] p-4 ring-1 ring-white/10">
@@ -81,6 +85,15 @@ export function BidPanel({
           </button>
         ))}
       </div>
+      {onCount && (
+        <button
+          type="button"
+          onClick={onCount}
+          className="mt-3 w-full rounded-xl bg-white/10 px-4 py-2 text-sm font-medium transition hover:bg-white/20"
+        >
+          Count the hand suit by suit first
+        </button>
+      )}
       {!peeked ? (
         <button
           type="button"
@@ -187,6 +200,8 @@ export interface Settings {
   coachMode: 'mistakes' | 'instant' | 'endOfHand';
   allowNil: boolean;
   targetScore: number;
+  /** Prompt for a suit-by-suit trick count before each of the player's bids. */
+  countPrompt: boolean;
 }
 
 export function SettingsPanel({
@@ -234,6 +249,16 @@ export function SettingsPanel({
               { value: 'advanced', label: 'Tough' },
             ]}
             onChange={(v) => onChange({ ...settings, difficulty: v as Difficulty })}
+          />
+          <Choice
+            label="Hand counting"
+            hint="Count each suit yourself before you bid, then compare."
+            value={settings.countPrompt ? 'on' : 'off'}
+            options={[
+              { value: 'on', label: 'On' },
+              { value: 'off', label: 'Off' },
+            ]}
+            onChange={(v) => onChange({ ...settings, countPrompt: v === 'on' })}
           />
           <Choice
             label="Nil bids"
@@ -358,6 +383,16 @@ export function StartScreen({
             onChange={(v) => onChange({ ...settings, difficulty: v as Difficulty })}
           />
           <Choice
+            label="Hand counting"
+            hint="Count each suit yourself before you bid, then compare."
+            value={settings.countPrompt ? 'on' : 'off'}
+            options={[
+              { value: 'on', label: 'On' },
+              { value: 'off', label: 'Off' },
+            ]}
+            onChange={(v) => onChange({ ...settings, countPrompt: v === 'on' })}
+          />
+          <Choice
             label="Game to"
             hint="Points needed to win."
             value={String(settings.targetScore)}
@@ -379,6 +414,70 @@ export function StartScreen({
         </button>
       </div>
     </main>
+  );
+}
+
+export function EnginePanel() {
+  const [open, setOpen] = useState(false);
+  const bagValue = 1 - BAG_TRUE_COST;
+  return (
+    <div className="rounded-2xl bg-white/5 ring-1 ring-white/10">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-3 text-sm font-semibold"
+      >
+        What the engine is judging
+        <span className="text-xs text-[color:var(--muted)]">{open ? 'hide' : 'show'}</span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-white/10 px-4 py-3 text-sm text-[color:var(--foreground)]/85">
+          <p>
+            It never asks &ldquo;does this card win the trick?&rdquo; It plays the rest of the hand
+            out thousands of times and scores the <em>finished hand</em>, so a card is only worth
+            what it does to the final score.
+          </p>
+          <dl className="space-y-2">
+            <div>
+              <dt className="font-medium text-[color:var(--foreground)]">Making your bid</dt>
+              <dd className="text-[color:var(--muted)]">
+                Ten points a trick, and the same again lost if you fall short. This is the biggest
+                single number on the table, so it comes first.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-[color:var(--foreground)]">Setting the opponents</dt>
+              <dd className="text-[color:var(--muted)]">
+                Weighed on the same scale as your own points{OPPONENT_WEIGHT === 1 ? '' : ', slightly discounted'}. Spades is a
+                race, so a point they fail to score counts as much as one you do. Taking a trick
+                that puts them under their bid swings the score by twice their contract.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-[color:var(--foreground)]">Bags</dt>
+              <dd className="text-[color:var(--muted)]">
+                An overtrick scores +1 tonight, but every tenth bag costs 100. Averaged out that is
+                -{BAG_TRUE_COST} on top of the +1, so a trick you did not bid for is treated as
+                worth about {bagValue}, not +1. That is why it will duck a winner once your bid is
+                safe and the opponents are out of reach.
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-[color:var(--foreground)]">Nil</dt>
+              <dd className="text-[color:var(--muted)]">
+                Plus or minus 100, which dwarfs everything else. Covering a partner&apos;s nil is
+                worth spending almost any card on.
+              </dd>
+            </div>
+          </dl>
+          <p className="text-[color:var(--muted)]">
+            Values are shown in points, where one point is ten score points — so roughly one trick
+            that actually matters. A gap smaller than the simulation&apos;s own margin of error is
+            never marked as a mistake.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

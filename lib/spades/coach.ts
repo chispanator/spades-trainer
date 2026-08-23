@@ -176,6 +176,8 @@ function buildNotes(
   const stillNeeded = contract - teamTricks;
   const tricksLeft = hand.length;
   const partner = partnerOf(seat);
+  const oppTeam = (team === 0 ? 1 : 0) as 0 | 1;
+  const oppStillShort = contractOf(bids, oppTeam) - tricksOf(tricksWon, oppTeam);
 
   const leading = trick.length === 0;
   const isLast = trick.length === 3;
@@ -247,7 +249,14 @@ function buildNotes(
     }
     if (!bestTakesLead && playedTakesLead && stillNeeded <= 0) {
       notes.push(
-        `Your bid of ${contract} is already in the bag. Extra tricks are bags worth -1 each, and ten of them cost 100 — ducking with ${cardName(best)} is the disciplined play.`
+        oppStillShort > 0
+          ? `Your side already has its ${contract}, and the opponents are not close enough to be caught — with ${tricksLeft} left they only need ${oppStillShort} more. So this trick buys a bag and nothing else, and ducking with ${cardName(best)} is the disciplined play.`
+          : `Your side already has its ${contract} and the opponents have theirs. An overtrick scores +1 tonight but every tenth bag costs 100, so a trick you did not bid for is worth about -9. ${cardName(best)} lets it go.`
+      );
+    }
+    if (bestTakesLead && stillNeeded <= 0 && oppStillShort > 0 && !playedTakesLead) {
+      notes.push(
+        `You have your bid, but the opponents are still ${oppStillShort} short with ${tricksLeft} to play. A trick you take now is one they cannot get back — setting them is worth far more than the bag costs you.`
       );
     }
     if (
@@ -319,9 +328,17 @@ function buildNotes(
       `Expected tricks for your side: ${playedEval.avgTeamTricks.toFixed(1)} versus ${bestEval.avgTeamTricks.toFixed(1)}.`
     );
   }
+  const setDelta = bestEval.setProb - playedEval.setProb;
+  if (Math.abs(setDelta) >= 0.04) {
+    notes.push(
+      `Chance of setting the opponents: ${pct(playedEval.setProb)} after ${cardName(played)}, ${pct(bestEval.setProb)} after ${cardName(best)}.`
+    );
+  }
   const bagDelta = playedEval.avgBags - bestEval.avgBags;
   if (bagDelta >= 0.25) {
-    notes.push(`It also picks up about ${bagDelta.toFixed(1)} extra bag${bagDelta >= 1.5 ? 's' : ''}.`);
+    notes.push(
+      `It also picks up about ${bagDelta.toFixed(1)} extra bag${bagDelta >= 1.5 ? 's' : ''}, and a bag is worth roughly -9 once the ten-bag penalty is counted in.`
+    );
   }
 
   if (!notes.length && grade !== 'optimal') {
@@ -420,6 +437,100 @@ export function reviewBid(
   }
 
   return { bid, suggested: s.nil ? 0 : suggested, suggestNil: s.nil, estimate, breakdown, grade, headline, notes };
+}
+
+// -------------------------------------------------------- hand counting --
+
+export interface HandCountReview {
+  yours: number[];
+  engine: number[];
+  totalYours: number;
+  totalEngine: number;
+  /** Your count minus the simulation's. Positive means you were optimistic. */
+  delta: number;
+  grade: Grade;
+  headline: string;
+  notes: string[];
+}
+
+/**
+ * Compares the player's own suit-by-suit count against what the simulation
+ * actually gets. The point is not the total - it is finding *which* suit the
+ * player is misreading, since length and shortness are the two things people
+ * most reliably get wrong.
+ */
+export function reviewHandCount(counts: number[], est: TrickEstimate): HandCountReview {
+  const yours = counts.slice();
+  const engine = est.bySuit.slice();
+  const totalYours = yours.reduce((a, b) => a + b, 0);
+  const totalEngine = est.expected;
+  const delta = totalYours - totalEngine;
+  const notes: string[] = [];
+
+  for (let s = 3; s >= 0; s--) {
+    const len = est.lengths[s];
+    if (!len) continue;
+    const gap = yours[s] - engine[s];
+    const suit = SUIT_NAME[s].toLowerCase();
+
+    if (gap >= 0.8) {
+      if (s !== 3 && len >= 5) {
+        notes.push(
+          `You counted ${yours[s]} in ${suit} but the simulation gets ${engine[s].toFixed(1)}. Holding ${len} of them means the other three seats are short: after two rounds somebody is void and starts trumping, so the length past the winners is worth almost nothing.`
+        );
+      } else if (s !== 3) {
+        notes.push(
+          `${suit.charAt(0).toUpperCase() + suit.slice(1)} came to ${engine[s].toFixed(1)}, not ${yours[s]}. Honours below the ace only cash when the cards above them are placed kindly.`
+        );
+      } else {
+        notes.push(
+          `You counted ${yours[s]} spade tricks; the simulation gets ${engine[s].toFixed(1)}. Middling trumps get drawn out by the higher ones before they can do any work.`
+        );
+      }
+    } else if (gap <= -0.8) {
+      if (s === 3 && est.ruffs >= 0.5) {
+        notes.push(
+          `Spades were worth more than you gave them — ${engine[s].toFixed(1)}, and ${est.ruffs.toFixed(1)} of those come from ruffing rather than from the trumps themselves.`
+        );
+      } else {
+        notes.push(
+          `You undersold ${suit}: ${engine[s].toFixed(1)} tricks against the ${yours[s]} you counted.`
+        );
+      }
+    }
+  }
+
+  const shortSuits = [0, 1, 2].filter((s) => est.lengths[s] <= 1);
+  if (shortSuits.length && est.ruffs >= 0.5 && yours[3] <= engine[3]) {
+    const names = shortSuits.map((s) => SUIT_NAME[s].toLowerCase()).join(' and ');
+    notes.push(
+      `Being short in ${names} is worth about ${est.ruffs.toFixed(1)} tricks, but they show up in the spade column — shortness pays in trumps, never in the suit you are short of.`
+    );
+  }
+
+  const size = Math.abs(delta);
+  let grade: Grade;
+  if (size <= 0.5) grade = 'optimal';
+  else if (size <= 1.0) grade = 'good';
+  else if (size <= 2.0) grade = 'inaccuracy';
+  else if (size <= 3.0) grade = 'mistake';
+  else grade = 'blunder';
+
+  let headline: string;
+  if (size <= 0.5) {
+    headline = `Spot on — you counted ${totalYours}, the simulation gets ${totalEngine.toFixed(1)}.`;
+  } else if (delta > 0) {
+    headline = `You are ${delta.toFixed(1)} tricks optimistic — you counted ${totalYours}, it plays for ${totalEngine.toFixed(1)}.`;
+  } else {
+    headline = `You are ${size.toFixed(1)} tricks light — you counted ${totalYours}, it plays for ${totalEngine.toFixed(1)}.`;
+  }
+  if (!notes.length) {
+    notes.push(
+      `No single suit is far out; the difference is spread thinly across the hand rather than sitting in one misread holding.`
+    );
+  }
+
+  return { yours, engine, totalYours, totalEngine, delta, grade, headline, notes };
 }
 
 /** Cards the player could legally have chosen, for the review UI. */

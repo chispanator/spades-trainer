@@ -23,11 +23,35 @@ verdict comes from simulating the rest of the hand.
    numbers means two cards are compared on identical deals, so the difference
    between them is far less noisy than evaluating each on its own.
 4. **Play the hand out** with a fast rollout policy for all four seats and score
-   the result with the real scoring rules — contract, bags, nil and all.
+   the result — contract, bags, nil and all.
 5. **Grade against the engine's own error bars.** The gap between your card and
    the best card is reported with a paired standard error, and a play is only
    called a mistake when the gap clears that noise. Values are in "points", where
    one point is ten spades score points, so roughly one meaningful trick.
+
+## What it is actually maximising
+
+This is the part that decides whether the engine plays like a good partner or
+like a trick-grabber, so it is stated explicitly in `lib/spades/playstate.ts`.
+
+- **Contract first.** Ten a trick for making the bid, the same lost for missing.
+- **Setting the opponents counts the same as scoring yourself** (`OPPONENT_WEIGHT
+  = 1`). Spades is a race, so a point they fail to score is worth a point you do.
+  Putting them under their bid swings the score by roughly twice their contract,
+  which is why the engine will happily take a bag to do it.
+- **A bag is worth about -9, not +1** (`BAG_TRUE_COST`). An overtrick scores +1
+  tonight, but every tenth bag costs 100, so amortised each one carries -10 on
+  top of that +1. The correction cancels against the real -100 when the penalty
+  fires, so a bag is valued the same whether the counter sits at 0 or at 9.
+
+That last point matters more than it looks. Scoring bags at their face value of
++1 — which is what the hand score alone says — makes the engine treat every
+overtrick as free money and grab tricks a good player would duck. The scoreboard
+still uses the real rules; the correction applies only when *judging* a play.
+
+`scripts/bagtest.ts` pins this down with two endgames that differ only in the
+opponents' contract: the engine must duck the same ace in one and take it in the
+other.
 
 The explanations are generated separately by reading the position — partner
 already winning the trick, contract already made, a live nil, a ruffing chance,
@@ -37,6 +61,26 @@ Grades are calibrated against measured data rather than guesswork. A competent
 rollout policy gives up 0.00 points at the median decision, 0.68 at the 90th
 percentile and 1.71 at the 97th; the thresholds in `lib/spades/coach.ts` sit on
 that scale.
+
+## Counting your hand
+
+Before bidding you can write down, suit by suit, how many tricks you think the
+hand is worth, and only then see what the simulation gets. The engine attributes
+each simulated trick to the suit of the card that actually *won* it, and counts
+separately how many came from ruffing, so the comparison lands in the same terms
+a player thinks in.
+
+That breakdown makes two pieces of table wisdom measurable, both pinned down in
+`scripts/handcount.ts`:
+
+- **Length is not tricks.** Seven diamonds headed by the eight return `0.0`
+  diamond tricks. Holding seven means the other three seats are short, and once
+  somebody is void they trump instead of following.
+- **Shortness pays in trumps.** A club void alongside five middling spades is
+  worth 2.8 spade tricks — 2.5 of them ruffs, and none of them in clubs.
+
+The app tracks how far off your counts run across a session and whether you lean
+optimistic or cautious, which is usually more useful than any single hand.
 
 ## Rules implemented
 
@@ -76,6 +120,24 @@ npx tsx scripts/playtest.ts
 This drives a whole game through the state machine with no UI, asserting that
 every hand has thirteen tricks and that every decision is reviewed, and reports
 coach latency.
+
+```bash
+npx tsx scripts/bagtest.ts
+```
+
+Two endgames where South holds the same three cards and the same guaranteed
+winner, and only the opponents' contract differs. A correctly weighted engine
+ducks in one and grabs in the other; one that treats overtricks as free grabs in
+both. Exits non-zero on failure.
+
+```bash
+npx tsx scripts/handcount.ts
+```
+
+Checks the per-suit trick attribution against how players actually count: that a
+long weak side suit returns less than half its length, that a void produces
+ruffing tricks in the spade column rather than in the suit itself, and that the
+per-suit numbers sum to the total.
 
 ## Layout
 

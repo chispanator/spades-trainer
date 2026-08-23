@@ -65,7 +65,8 @@ export interface TeamHandScore {
   tricks: number;
   madeContract: boolean;
   nilResults: { seat: Seat; made: boolean }[];
-  bagPenaltyApplied: boolean;
+  /** How many times the ten-bag penalty fired this hand. */
+  bagPenalties: number;
 }
 
 /**
@@ -118,14 +119,14 @@ export function scoreTeamHand(
   }
 
   let bagsAfter = bagsBefore + bagsEarned;
-  let bagPenaltyApplied = false;
+  let bagPenalties = 0;
   while (bagsAfter >= 10) {
     score -= 100;
     bagsAfter -= 10;
-    bagPenaltyApplied = true;
+    bagPenalties++;
   }
 
-  return { score, bagsEarned, bagsAfter, contract, tricks, madeContract, nilResults, bagPenaltyApplied };
+  return { score, bagsEarned, bagsAfter, contract, tricks, madeContract, nilResults, bagPenalties };
 }
 
 export const TEAM_SEATS: [[Seat, Seat], [Seat, Seat]] = [

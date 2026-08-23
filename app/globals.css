@@ -39,13 +39,46 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+  The hand is always a single row. Card width is derived from the width the row
+  actually has rather than from a breakpoint, so thirteen cards fit whatever the
+  window or sidebar is doing, and no card is ever pushed onto a second line.
+  Thirteen cards span (12 x 0.58 + 1) = 7.96 card widths, hence the 11.2cqw.
+*/
+.hand-fit {
+  container-type: inline-size;
+}
+.hand-row {
+  --card-w: clamp(2.1rem, 11.2cqw, 4.5rem);
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+}
+.hand-row > * {
+  flex: 0 0 auto;
+}
+.hand-row > * + * {
+  margin-left: calc(var(--card-w) * -0.42);
+}
+
+.fluid-card {
+  width: var(--card-w);
+  height: calc(var(--card-w) * 1.42);
+  border-radius: calc(var(--card-w) * 0.1);
+  /* Floor keeps the corner rank legible when the row is squeezed on a phone. */
+  font-size: max(0.6rem, calc(var(--card-w) * 0.2));
+}
+.fluid-pip {
+  font-size: calc(var(--card-w) * 0.45);
+}
+
 /* The player's hand overlaps; hovering lifts a card clear of its neighbours. */
 .hand-card {
   transition: transform 140ms ease, box-shadow 140ms ease;
 }
 .hand-card-playable:hover,
 .hand-card-playable:focus-visible {
-  transform: translateY(-14px);
+  transform: translateY(calc(var(--card-w) * -0.22));
   z-index: 20;
 }
 

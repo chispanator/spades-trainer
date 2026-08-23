@@ -2,18 +2,21 @@
 
 import { Card, RANK_LABEL, SUIT_IS_RED, SUIT_LABEL, cardNameLong, rankOf, suitOf } from '@/lib/spades/cards';
 
-type Size = 'sm' | 'md' | 'lg';
+type Size = 'sm' | 'md' | 'lg' | 'fluid';
 
 const SIZES: Record<Size, string> = {
   sm: 'w-11 h-16 text-[11px] rounded-md',
   md: 'w-14 h-20 text-xs rounded-lg',
   lg: 'w-16 h-24 sm:w-[4.5rem] sm:h-[6.5rem] text-sm rounded-lg',
+  // Sized from the row it sits in - see .fluid-card in globals.css.
+  fluid: 'fluid-card',
 };
 
 const PIP: Record<Size, string> = {
   sm: 'text-lg',
   md: 'text-2xl',
   lg: 'text-3xl',
+  fluid: 'fluid-pip',
 };
 
 export function PlayingCard({
@@ -51,7 +54,7 @@ export function PlayingCard({
       aria-hidden={decorative || undefined}
       aria-label={decorative ? undefined : cardNameLong(card)}
     >
-      <span className={`absolute top-0.5 left-1 font-semibold leading-none ${red ? 'text-rose-600' : 'text-slate-900'}`}>
+      <span className={`absolute top-[0.2em] left-[0.35em] font-semibold leading-none ${red ? 'text-rose-600' : 'text-slate-900'}`}>
         {RANK_LABEL[rankOf(card)]}
         <span className="block">{SUIT_LABEL[suitOf(card)]}</span>
       </span>
@@ -64,7 +67,7 @@ export function PlayingCard({
         {SUIT_LABEL[suitOf(card)]}
       </span>
       <span
-        className={`absolute bottom-0.5 right-1 rotate-180 font-semibold leading-none ${
+        className={`absolute bottom-[0.2em] right-[0.35em] rotate-180 font-semibold leading-none ${
           red ? 'text-rose-600' : 'text-slate-900'
         }`}
         aria-hidden

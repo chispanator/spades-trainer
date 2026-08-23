@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, SEAT_NAME, SUIT_NAME, suitOf } from '@/lib/spades/cards';
-import { BidReview, PlayReview } from '@/lib/spades/coach';
+import { BidReview, HandCountReview, PlayReview, reviewHandCount } from '@/lib/spades/coach';
 import { TrickEstimate } from '@/lib/spades/mc';
 import {
   GameState,
@@ -24,10 +24,12 @@ import {
   submitBid,
 } from '@/lib/spades/game';
 import { GameTable } from '@/components/GameTable';
+import { HandCountResult, HandCountWorksheet } from '@/components/HandCount';
 import { PlayerHand } from '@/components/PlayerHand';
 import { AccuracyBar, BidFeedback, FeedbackCard, HintCard, ReviewList } from '@/components/Coach';
 import {
   BidPanel,
+  EnginePanel,
   HandSummary,
   RulesPanel,
   Scoreboard,
@@ -43,6 +45,7 @@ const DEFAULT_SETTINGS: Settings = {
   coachMode: 'mistakes',
   allowNil: true,
   targetScore: 350,
+  countPrompt: true,
 };
 
 const AI_BID_DELAY = 420;
@@ -58,6 +61,11 @@ export default function Page() {
   const [lastReview, setLastReview] = useState<PlayReview | null>(null);
   const [peek, setPeek] = useState<TrickEstimate | null>(null);
   const [assists, setAssists] = useState(0);
+  // Hand counting: 'idle' until the player opens the worksheet (or the setting
+  // opens it for them), then 'result', then out of the way for the bid itself.
+  const [countPhase, setCountPhase] = useState<'idle' | 'entering' | 'result' | 'done'>('idle');
+  const [countReview, setCountReview] = useState<HandCountReview | null>(null);
+  const [countMisses, setCountMisses] = useState<number[]>([]);
   const blocked = pendingReview !== null || pendingBidReview !== null;
   // Purely derived: an opponent is "thinking" whenever it is their turn to act.
   const thinking =
@@ -136,13 +144,32 @@ export default function Page() {
     setAssists((n) => n + 1);
   }, [game]);
 
+  const handleCountSubmit = useCallback(
+    (counts: number[]) => {
+      if (!game) return;
+      const est = bidEstimate(game, HUMAN);
+      const review = reviewHandCount(counts, est);
+      setPeek(est); // having counted, the player has earned the number
+      setCountReview(review);
+      setCountMisses((m) => [...m, review.delta]);
+      setCountPhase('result');
+    },
+    [game]
+  );
+
+  const resetHandCount = useCallback(() => {
+    setCountPhase('idle');
+    setCountReview(null);
+    setPeek(null);
+  }, []);
+
   const startNewGame = useCallback(() => {
     setPendingReview(null);
     setPendingBidReview(null);
     setLastReview(null);
     setHint(null);
-    setPeek(null);
     setAssists(0);
+    resetHandCount();
     setGame(
       newGame({
         seed: Math.floor(Math.random() * 2 ** 31),
@@ -151,7 +178,7 @@ export default function Page() {
         allowNil: settings.allowNil,
       })
     );
-  }, [settings]);
+  }, [settings, resetHandCount]);
 
   const allReviews = useMemo(() => {
     if (!game) return [];
@@ -171,6 +198,21 @@ export default function Page() {
         ? 'Dimmed cards are spades — nobody may lead one until spades have been broken.'
         : `Dimmed cards are not legal — you have to follow ${SUIT_NAME_LOWER[suitOf(game.trick[0].card)]}.`
       : null;
+  const myBidTurn = game.phase === 'bidding' && game.turn === HUMAN && !blocked;
+  // The worksheet opens on request, or straight away when the setting asks for it.
+  const showWorksheet =
+    myBidTurn && (countPhase === 'entering' || (settings.countPrompt && countPhase === 'idle'));
+  const showBidPanel = myBidTurn && !showWorksheet && countPhase !== 'result';
+  const meanMiss = countMisses.length
+    ? countMisses.reduce((a, b) => a + b, 0) / countMisses.length
+    : 0;
+  const bias =
+    Math.abs(meanMiss) < 0.25
+      ? 'balanced'
+      : meanMiss > 0
+        ? `${meanMiss.toFixed(1)} optimistic`
+        : `${Math.abs(meanMiss).toFixed(1)} cautious`;
+
   const needsAction =
     blocked ||
     (game.phase === 'bidding' && game.turn === HUMAN) ||
@@ -257,13 +299,30 @@ export default function Page() {
                   <FeedbackCard review={pendingReview} onContinue={() => setPendingReview(null)} />
                 )}
 
-                {game.phase === 'bidding' && game.turn === HUMAN && !blocked && (
+                {showWorksheet && (
+                  <HandCountWorksheet
+                    hand={game.hands[HUMAN]}
+                    onSubmit={handleCountSubmit}
+                    onSkip={() => setCountPhase('done')}
+                  />
+                )}
+
+                {countPhase === 'result' && countReview && peek && (
+                  <HandCountResult
+                    review={countReview}
+                    estimate={peek}
+                    onDone={() => setCountPhase('done')}
+                  />
+                )}
+
+                {showBidPanel && (
                   <BidPanel
                     onBid={handleBid}
                     allowNil={game.options.allowNil}
                     estimate={peek}
                     onPeek={handlePeek}
                     peeked={peek !== null}
+                    onCount={countReview ? undefined : () => setCountPhase('entering')}
                   />
                 )}
 
@@ -277,6 +336,7 @@ export default function Page() {
                       setPendingReview(null);
                       setPendingBidReview(null);
                       setLastReview(null);
+                      resetHandCount();
                       if (game.phase === 'gameComplete') startNewGame();
                       else setGame(dealNextHand(game));
                     }}
@@ -302,6 +362,31 @@ export default function Page() {
 
           <Scoreboard game={game} />
 
+          {countMisses.length > 0 && (
+            <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
+              <h2 className="text-sm font-semibold">Your hand counting</h2>
+              <dl className="mt-2 space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-[color:var(--muted)]">Hands counted</dt>
+                  <dd className="tabular-nums">{countMisses.length}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-[color:var(--muted)]">Average miss</dt>
+                  <dd className="tabular-nums">
+                    {(
+                      countMisses.reduce((a, b) => a + Math.abs(b), 0) / countMisses.length
+                    ).toFixed(1)}{' '}
+                    tricks
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-[color:var(--muted)]">Leaning</dt>
+                  <dd className="tabular-nums">{bias}</dd>
+                </div>
+              </dl>
+            </div>
+          )}
+
           {assists > 0 && (
             <p className="px-1 text-xs text-[color:var(--muted)]">
               You have asked the engine for help {assists} time{assists === 1 ? '' : 's'} this game.
@@ -314,6 +399,7 @@ export default function Page() {
             onNewGame={startNewGame}
             disabled={false}
           />
+          <EnginePanel />
           <RulesPanel />
         </aside>
       </div>
