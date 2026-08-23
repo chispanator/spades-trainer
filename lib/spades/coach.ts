@@ -113,7 +113,10 @@ export function reviewPlay(
   const grade = gradeFor(loss, significant);
   const hadChoice = ranked.length > 1;
 
-  const notes = hadChoice ? buildNotes(sit, played, best.card, playedEval, best, grade, ranked) : [];
+  // Ordered most specific first, then capped: a wall of bullets reads as noise.
+  const notes = hadChoice
+    ? buildNotes(sit, played, best.card, playedEval, best, grade, ranked).slice(0, 5)
+    : [];
   const headline = buildHeadline(grade, played, best.card, loss, hadChoice, withinNoise);
 
   return {
@@ -295,6 +298,27 @@ function buildNotes(
     const heldRanks = held.map(rankOf);
     const topHeld = Math.max(...heldRanks);
     const holdsAce = heldRanks.includes(12);
+
+    /*
+      "Always cash your aces" is the most common rule players bring to spades,
+      and the guarantee behind it is real. What it misses is the price of the
+      lead itself, so the answer has to concede the first point before making
+      the second - and with this position's own numbers, not a slogan.
+    */
+    if (rankOf(played) === 12 && playedSuit !== 3 && suitOf(best) !== playedSuit) {
+      const holdsKing = heldRanks.includes(11);
+      const mineTotal = playedEval.avgTeamTricks;
+      const theirsTotal = bestEval.avgTeamTricks;
+      if (theirsTotal > mineTotal + 0.03) {
+        notes.push(
+          `Cashing the ace does bank the trick — that part of the plan works, and it is the one card nobody can beat. The price is the lead: winning it puts you back on play, and whoever opens a suit tends to give a trick away in it. Your side finishes with ${mineTotal.toFixed(1)} tricks after ${cardName(played)} against ${theirsTotal.toFixed(1)} after ${cardName(best)} — the ace is safe either way, the rest of the hand is not.${
+            holdsKing
+              ? ''
+              : ` With no king behind it, the ace wins one trick whenever you spend it, so there is rarely a hurry.`
+          }`
+        );
+      }
+    }
 
     /*
       Leading an honour while holding a higher one and no ace is a deliberate

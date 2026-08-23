@@ -77,6 +77,38 @@ sound. But leading hearts at all returns *fewer* heart tricks than leaving the
 suit alone — the promotion does not pay for itself, and the coach says so with
 those numbers rather than asserting a rule.
 
+### "Always cash your aces"
+
+The most common rule players bring to spades, and the guarantee behind it is
+real. `scripts/acetest.ts` measures it over 161 random deals where South is on
+lead holding a side-suit ace:
+
+```
+  ace lead is the engine's top choice: 6% of the time
+  cost of following the rule: mean 0.71, median 0.63, p90 1.42
+  total tricks our side takes: 6.71 leading the ace vs 6.86 otherwise
+
+  leading the ace now      : wins its trick 96.4%, trumped 3.6%
+  leading the engine's card: the ace still wins 83.5%, trumped 16.0%
+```
+
+So the rule is right about what it claims — cashing the ace does convert it from
+an 84% trick into a 96% one, and holding it risks a 16% ruff. It is wrong about
+what that is worth. Winning the trick leaves you on lead, and the side that
+opens a suit tends to give a trick away in it; the 0.13 of a trick gained on the
+ace is paid for twice over elsewhere, which shows up as **fewer total tricks**
+(6.71 against 6.86). That the total moves the wrong way is what rules out a
+scoring quirk.
+
+The exception the data does support: an ace **with the king** behind it is a far
+better lead (top choice 15% of the time, mean cost 0.37) than a bare ace (3%,
+0.85), because there the lead sets up a second trick instead of just banking one.
+
+One caveat stated plainly: this is the engine's model, and the size of the
+penalty depends on how well the rollout policy handles being on lead. The
+direction is corroborated independently by the K-J-x result above, but treat
+0.71 as an estimate rather than a constant of nature.
+
 The explanations are generated separately by reading the position — partner
 already winning the trick, contract already made, a live nil, a ruffing chance,
 leading away from an honour — so the feedback says *why*, not just *how much*.
