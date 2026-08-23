@@ -1,5 +1,7 @@
 # Spades Trainer
 
+**Play it: https://spades-trainer.vercel.app**
+
 A playable game of spades that grades every decision you make.
 
 You sit South with a simulated partner and two opponents. After each bid and each
