@@ -15,6 +15,12 @@ export const makeCard = (s: SuitIdx, r: number): Card => s * 13 + r;
 export const RANK_LABEL = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 export const SUIT_LABEL = ['♣', '♦', '♥', '♠'];
 export const SUIT_NAME = ['Clubs', 'Diamonds', 'Hearts', 'Spades'];
+/** Singular form, for phrases like "two heart tricks". */
+export const SUIT_ADJECTIVE = ['club', 'diamond', 'heart', 'spade'];
+export const RANK_WORD = [
+  'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'jack', 'queen', 'king', 'ace',
+];
 export const SUIT_IS_RED = [false, true, true, false];
 
 export const SEAT_NAME = ['You', 'West', 'Partner', 'East'];

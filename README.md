@@ -53,6 +53,30 @@ still uses the real rules; the correction applies only when *judging* a play.
 opponents' contract: the engine must duck the same ace in one and take it in the
 other.
 
+## Answering the plan, not just the card
+
+When the engine's pick is in a different suit, "you should have led clubs" hides
+two separate decisions. The coach splits them: what choosing that suit cost, and
+what the card chosen *within* it cost. Quite often the second is zero — the
+player read the suit correctly and only picked the wrong one to open.
+
+It also answers deliberate plans on their own terms. Leading the jack from K-J-x
+to force out the ace is a real plan, so the review compares how many tricks the
+side ends up taking **in that suit** either way. In `scripts/promotetest.ts`,
+South holds K J 4 of hearts on lead:
+
+```
+  lead    ev      our heart tricks
+  9♦      2.54            1.33
+  J♥      2.16            1.19
+  K♥      1.79            1.06
+```
+
+The jack is the best heart by a clear margin, so the plan's internal logic is
+sound. But leading hearts at all returns *fewer* heart tricks than leaving the
+suit alone — the promotion does not pay for itself, and the coach says so with
+those numbers rather than asserting a rule.
+
 The explanations are generated separately by reading the position — partner
 already winning the trick, contract already made, a live nil, a ruffing chance,
 leading away from an honour — so the feedback says *why*, not just *how much*.

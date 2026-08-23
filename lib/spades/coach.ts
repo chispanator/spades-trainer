@@ -1,6 +1,8 @@
 import {
   Card,
   RANK_LABEL,
+  RANK_WORD,
+  SUIT_ADJECTIVE,
   SUIT_NAME,
   Seat,
   cardName,
@@ -111,7 +113,7 @@ export function reviewPlay(
   const grade = gradeFor(loss, significant);
   const hadChoice = ranked.length > 1;
 
-  const notes = hadChoice ? buildNotes(sit, played, best.card, playedEval, best, grade) : [];
+  const notes = hadChoice ? buildNotes(sit, played, best.card, playedEval, best, grade, ranked) : [];
   const headline = buildHeadline(grade, played, best.card, loss, hadChoice, withinNoise);
 
   return {
@@ -166,7 +168,8 @@ function buildNotes(
   best: Card,
   playedEval: CandidateEval,
   bestEval: CandidateEval,
-  grade: Grade
+  grade: Grade,
+  ranked: CandidateEval[]
 ): string[] {
   const notes: string[] = [];
   const { seat, trick, bids, tricksWon, hand } = sit;
@@ -286,11 +289,62 @@ function buildNotes(
 
   // ---- leading ----
   if (leading) {
-    if (suitOf(best) !== suitOf(played)) {
-      const playedLen = hand.filter((c) => suitOf(c) === suitOf(played)).length;
+    const playedSuit = suitOf(played);
+    const playedSuitName = SUIT_NAME[playedSuit].toLowerCase();
+    const held = hand.filter((c) => suitOf(c) === playedSuit);
+    const heldRanks = held.map(rankOf);
+    const topHeld = Math.max(...heldRanks);
+    const holdsAce = heldRanks.includes(12);
+
+    /*
+      Leading an honour while holding a higher one and no ace is a deliberate
+      plan - spend this card to draw the ace and promote the one above it. It
+      deserves an answer in its own terms, so compare the tricks the side ends
+      up taking *in that suit* rather than only the overall value.
+    */
+    const promoting =
+      !holdsAce && rankOf(played) >= 8 && rankOf(played) < topHeld && topHeld >= 10;
+    if (promoting && suitOf(best) !== playedSuit) {
+      const mine = playedEval.suitTricks[playedSuit];
+      const theirs = bestEval.suitTricks[playedSuit];
+      const promoted = RANK_WORD[topHeld];
+      const spent = RANK_WORD[rankOf(played)];
+      const suitAdj = SUIT_ADJECTIVE[playedSuit];
+      if (mine <= theirs + 0.03) {
+        notes.push(
+          `Leading ${cardName(played)} to draw the ace and promote your ${promoted} is the right idea in principle, but it does not pay for itself here. Your side ends up with ${mine.toFixed(1)} ${suitAdj} tricks after ${cardName(played)}, against ${theirs.toFixed(1)} after ${cardName(best)} — opening the suit yourself gets you fewer of them, not more. You spend the ${spent} now and the ${promoted} still has to get past the ace; leave the suit for somebody else to broach and the ${promoted} comes home more often.`
+        );
+      } else {
+        notes.push(
+          `The promotion plan works — ${mine.toFixed(1)} ${suitAdj} tricks after ${cardName(played)} against ${theirs.toFixed(1)} after ${cardName(best)}. The cost is elsewhere in the hand, not in the idea.`
+        );
+      }
+    }
+
+    if (suitOf(best) !== playedSuit) {
+      const playedLen = held.length;
       const bestLen = hand.filter((c) => suitOf(c) === suitOf(best)).length;
+
+      // Separate "wrong suit" from "wrong card in the right suit" - they are
+      // different mistakes and a player usually only made one of them.
+      const inSuit = ranked.filter((c) => suitOf(c.card) === playedSuit);
+      if (inSuit.length) {
+        const bestInSuit = inSuit[0];
+        const cardCost = bestInSuit.ev - playedEval.ev;
+        const suitCost = bestEval.ev - bestInSuit.ev;
+        if (cardCost <= 0.08) {
+          notes.push(
+            `Within ${playedSuitName}, ${cardName(played)} was the right card — the whole cost is in choosing the suit, not in which card you led.`
+          );
+        } else {
+          notes.push(
+            `Two separate decisions: choosing ${playedSuitName} costs ${suitCost.toFixed(2)}, and leading ${cardName(played)} rather than ${cardName(bestInSuit.card)} within it costs a further ${cardCost.toFixed(2)}.`
+          );
+        }
+      }
+
       notes.push(
-        `Leading ${SUIT_NAME[suitOf(best)].toLowerCase()} works better than ${SUIT_NAME[suitOf(played)].toLowerCase()} from this hand.`
+        `Leading ${SUIT_NAME[suitOf(best)].toLowerCase()} works better than ${playedSuitName} from this hand.`
       );
       if (playedLen >= 6 && bestLen < playedLen) {
         notes.push(

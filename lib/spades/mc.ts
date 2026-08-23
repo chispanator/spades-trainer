@@ -24,6 +24,12 @@ export interface CandidateEval {
   avgTeamTricks: number;
   avgBags: number;
   avgScore: number;
+  /**
+   * Tricks this side ends up winning in each suit, credited to the suit of the
+   * card that won them. Lets the coach answer "does leading this suit actually
+   * bring in the tricks I am hoping for?" rather than only comparing totals.
+   */
+  suitTricks: number[];
   samples: number;
 }
 
@@ -34,13 +40,6 @@ export interface EvalResult {
   /** Per-sample utilities, candidate-major, kept for paired statistics. */
   utilities: Float64Array;
   rowOf: Map<Card, number>;
-}
-
-function playout(st: PlayState): void {
-  let guard = 0;
-  while (!isTerminal(st) && guard++ < 64) {
-    applyCard(st, heuristicChoice(st));
-  }
 }
 
 function stateFrom(ctx: EvalContext, hands: Card[][]): PlayState {
@@ -78,6 +77,9 @@ export function evaluatePlays(ctx: EvalContext, samples: number, seed = 12345): 
   const sumScore = new Float64Array(n);
   const madeCount = new Float64Array(n);
   const setCount = new Float64Array(n);
+  const sumSuitTricks = new Float64Array(n * 4);
+  const creditTeam = (winner: Seat) => teamOf(winner) === team;
+  const suitScratch = [0, 0, 0, 0];
 
   for (let s = 0; s < samples; s++) {
     const layout = dealUnseen(info, rng);
@@ -88,8 +90,19 @@ export function evaluatePlays(ctx: EvalContext, samples: number, seed = 12345): 
         layout[2].slice(),
         layout[3].slice(),
       ]);
-      applyCard(st, legal[k]);
-      playout(st);
+      // The card being judged is credited too, so the totals cover the whole hand.
+      suitScratch[0] = suitScratch[1] = suitScratch[2] = suitScratch[3] = 0;
+      const played = legal[k];
+      const trickBefore = st.trick.slice();
+      const actor = st.turn;
+      applyCard(st, played);
+      if (st.trick.length === 0) {
+        const full: TrickCard[] = [...trickBefore, { seat: actor, card: played }];
+        const w = full[winningIndex(full)];
+        if (creditTeam(w.seat)) suitScratch[suitOf(w.card)]++;
+      }
+      playoutAttributed(st, creditTeam, suitScratch);
+      for (let u = 0; u < 4; u++) sumSuitTricks[k * 4 + u] += suitScratch[u];
       utilities[k * samples + s] = terminalUtility(st, team);
       const o = outcomeOf(st);
       sumTricks[k] += o.teamTricks[team];
@@ -113,6 +126,7 @@ export function evaluatePlays(ctx: EvalContext, samples: number, seed = 12345): 
       avgTeamTricks: sumTricks[k] / samples,
       avgBags: sumBags[k] / samples,
       avgScore: sumScore[k] / samples,
+      suitTricks: [0, 1, 2, 3].map((u) => sumSuitTricks[k * 4 + u] / samples),
       samples,
     });
   }
@@ -207,7 +221,7 @@ export function estimateTricks(
       tricksWon: [0, 0, 0, 0],
       bagsBefore: [0, 0],
     };
-    ruffs += playoutAttributed(st, seat, bySuit);
+    ruffs += playoutAttributed(st, (w) => w === seat, bySuit);
     const t = st.tricksWon[seat];
     distribution[t]++;
     total += t;
@@ -231,7 +245,11 @@ export function estimateTricks(
  * Plays a hand out, recording which suit actually won each trick for `seat`.
  * Returns the number of those tricks that were ruffs.
  */
-function playoutAttributed(st: PlayState, seat: Seat, bySuit: number[]): number {
+function playoutAttributed(
+  st: PlayState,
+  credit: (winner: Seat) => boolean,
+  bySuit: number[]
+): number {
   let ruffs = 0;
   let guard = 0;
   while (!isTerminal(st) && guard++ < 64) {
@@ -244,7 +262,7 @@ function playoutAttributed(st: PlayState, seat: Seat, bySuit: number[]): number 
     if (st.trick.length === 0) {
       const full: TrickCard[] = [...before, { seat: actor, card }];
       const winner = full[winningIndex(full)];
-      if (winner.seat === seat) {
+      if (credit(winner.seat)) {
         const winSuit = suitOf(winner.card);
         bySuit[winSuit]++;
         if (winSuit === 3 && suitOf(full[0].card) !== 3) ruffs++;
