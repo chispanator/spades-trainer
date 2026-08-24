@@ -61,6 +61,14 @@ The visible result is that "the engine leans to A♦, but the gap is inside its
 margin of error" is no longer something the app can say. If the gap is inside
 the margin, there is no lean to report.
 
+The honest cost of that is stated too. Proving a gap takes deals, and at the
+number spent here the resolution runs out somewhere around half a point — so a
+play that was genuinely worth 0.3 points less now comes back as level rather
+than as a shade off. That band is the "good" grade, whose own description is
+"costs almost nothing", and the deal count in `game.ts` is the dial if you would
+rather have the granularity than the speed. Errors that actually cost tricks
+start at half a point and are caught most of the time.
+
 ## What it is actually maximising
 
 This is the part that decides whether the engine plays like a good partner or

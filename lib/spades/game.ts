@@ -60,6 +60,20 @@ export function coachSamples(choices: number): number {
  * The short list, and what is spent on it. Five is where the sweep in
  * scripts/selftest.ts settled: below it the genuinely best card starts falling
  * out of the first round, and above it the extra deals buy nothing.
+ *
+ * The deal count is a resolution dial, and what it buys is measured. Over 45
+ * plays whose true cost was between 0.15 and 0.45 points - the "good" band,
+ * whose own description is "costs almost nothing" - the coach proved the better
+ * card 0% of the time at 1800 deals, 16% at 4000 and 36% at 9000, at roughly
+ * 700ms, 1300ms and 2700ms per decision. Nothing was mis-advised at any of the
+ * three: more deals buy granularity on minor plays, never correctness.
+ *
+ * 1800 is chosen on that evidence. The pause falls after every card, and paying
+ * for it on the plays the app itself calls almost free is the wrong trade for
+ * something you sit and play. Errors that actually cost tricks are 0.5 points
+ * and up, and those are caught 86% of the time here. Raising this is the dial
+ * to turn if that judgement changes; cutting the variance a live nil puts on
+ * every deal would buy the same resolution without the wait.
  */
 export const COACH_RUNOFF = 1800;
 export const COACH_FINALISTS = 5;
