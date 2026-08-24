@@ -12,7 +12,17 @@ import { TEAM_SEATS, TrickCard, legalMoves, scoreTeamHand, trickWinner } from '.
 import { PlayState } from './playstate';
 import { heuristicChoice } from './policy';
 import { InfoSet, deriveVoids } from './inference';
-import { bidBreakdown, estimateTricks, evaluatePlays } from './mc';
+import {
+  CONFIDENCE_Z,
+  NOISE_FLOOR,
+  bidBreakdown,
+  estimateTricks,
+  evaluatePlays,
+  EvalResult,
+  evaluateWithRunoff,
+  pairedDifference,
+} from './mc';
+import { preferAmongEquals } from './judgment';
 import { BidReview, PlayReview, PlaySituation, reviewBid, reviewPlay } from './coach';
 
 export type Phase = 'bidding' | 'playing' | 'trickComplete' | 'handComplete' | 'gameComplete';
@@ -30,14 +40,29 @@ const AI_BID_SAMPLES: Record<Difficulty, number> = {
   advanced: 250,
 };
 /**
- * Simulations behind the feedback the player sees. Sampling is scaled to the
- * number of legal cards so the cost of a decision stays near 100ms whether the
- * player is choosing between two cards or thirteen; more samples on the small
- * decisions is what keeps the error bars tight enough to grade honestly.
+ * Simulations behind the feedback the player sees, in two rounds.
+ *
+ * Dividing a fixed budget by the number of legal cards is the obvious way to
+ * hold the cost of a decision steady, and it is backwards: the more cards there
+ * are, the more chances noise has to float one of them to the top, so the
+ * hardest decisions were being given the loosest error bars. Twelve legal cards
+ * bought 750 deals each, and with a nil live at the table the swing on a single
+ * deal is ten times the gap between two sensible discards.
+ *
+ * So the first round is deliberately cheap and only has to answer which cards
+ * are still in contention, and the budget that used to be spread across all of
+ * them goes to the few that survive.
  */
 export function coachSamples(choices: number): number {
-  return Math.max(500, Math.min(2500, Math.round(9000 / Math.max(1, choices))));
+  return Math.max(250, Math.min(600, Math.round(3600 / Math.max(1, choices))));
 }
+/**
+ * The short list, and what is spent on it. Five is where the sweep in
+ * scripts/selftest.ts settled: below it the genuinely best card starts falling
+ * out of the first round, and above it the extra deals buy nothing.
+ */
+export const COACH_RUNOFF = 1800;
+export const COACH_FINALISTS = 5;
 /** Simulations behind the live hint button, which should feel instant. */
 export function hintSamples(choices: number): number {
   return Math.max(250, Math.min(1200, Math.round(4000 / Math.max(1, choices))));
@@ -237,11 +262,40 @@ export function aiChooseCard(g: GameState, seat: Seat): Card {
     };
     return heuristicChoice(st);
   }
-  return evaluateFor(g, seat, samples).candidates[0].card;
+  return bestPlay(g, seat, evaluateFor(g, seat, samples));
+}
+
+/**
+ * The card to play out of a finished evaluation.
+ *
+ * Not `candidates[0]`: the top row of a ranking is only as meaningful as the
+ * gap beneath it, and inside the margin of error there is no gap - only the
+ * candidate whose sampling error happened to flatter it most. Everything the
+ * simulation cannot separate is handed to judgment.ts, which breaks the tie on
+ * what the cards are worth rather than on which random deals came up.
+ */
+export function bestPlay(g: GameState, seat: Seat, res: EvalResult): Card {
+  if (!res.candidates.length) return legalFor(g, seat)[0];
+  const leader = res.candidates[0];
+  const tied = res.candidates
+    .filter((c) => {
+      if (c.card === leader.card) return true;
+      const d = pairedDifference(res, leader.card, c.card);
+      return d.mean <= Math.max(NOISE_FLOOR, CONFIDENCE_Z * d.stdError);
+    })
+    .map((c) => c.card);
+  if (tied.length < 2) return leader.card;
+  return preferAmongEquals(tied, {
+    seat,
+    hand: g.hands[seat],
+    bids: numericBids(g),
+    unseen: buildInfoSet(g, seat).unseen,
+  });
 }
 
 /** Grades the human's card against the position it was played into. */
 export function reviewHumanPlay(g: GameState, card: Card): PlayReview {
+  const info = buildInfoSet(g, HUMAN);
   const sit: PlaySituation = {
     seat: HUMAN,
     hand: g.hands[HUMAN].slice(),
@@ -250,8 +304,28 @@ export function reviewHumanPlay(g: GameState, card: Card): PlayReview {
     tricksWon: g.tricksWon.slice(),
     spadesBroken: g.spadesBroken,
     trickNumber: g.completedTricks.length + 1,
+    unseen: info.unseen,
   };
-  return reviewPlay(sit, card, evaluateFor(g, HUMAN, coachSamples(legalFor(g, HUMAN).length)));
+  const res = evaluateWithRunoff(
+    {
+      info,
+      bids: numericBids(g),
+      trick: g.trick,
+      tricksWon: g.tricksWon,
+      spadesBroken: g.spadesBroken,
+      bagsBefore: g.bags,
+    },
+    {
+      samples: coachSamples(legalFor(g, HUMAN).length),
+      runoff: COACH_RUNOFF,
+      finalists: COACH_FINALISTS,
+      // The card actually played always gets the careful measurement, so the
+      // grade never rests on the coarse first round.
+      include: [card],
+      seed: decisionSeed(g, HUMAN),
+    }
+  );
+  return reviewPlay(sit, card, res);
 }
 
 export function playCard(g: GameState, card: Card, review?: PlayReview): GameState {

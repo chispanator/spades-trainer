@@ -10,6 +10,7 @@ import {
   aiBid,
   aiChooseCard,
   attachBidReview,
+  bestPlay,
   bidEstimate,
   dealNextHand,
   evaluateFor,
@@ -134,7 +135,7 @@ export default function Page() {
   const handleHint = useCallback(() => {
     if (!game || game.phase !== 'playing' || game.turn !== HUMAN) return;
     const res = evaluateFor(game, HUMAN, hintSamples(legalFor(game, HUMAN).length));
-    if (res.candidates.length) setHint(res.candidates[0].card);
+    if (res.candidates.length) setHint(bestPlay(game, HUMAN, res));
     setAssists((n) => n + 1);
   }, [game]);
 

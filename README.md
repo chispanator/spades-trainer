@@ -24,10 +24,42 @@ verdict comes from simulating the rest of the hand.
    between them is far less noisy than evaluating each on its own.
 4. **Play the hand out** with a fast rollout policy for all four seats and score
    the result — contract, bags, nil and all.
-5. **Grade against the engine's own error bars.** The gap between your card and
+5. **Run the survivors again.** A cheap first round only decides which cards are
+   still in contention; the deals saved on the rest are spent on the short list,
+   where the gaps are small enough to need them.
+6. **Grade against the engine's own error bars.** The gap between your card and
    the best card is reported with a paired standard error, and a play is only
    called a mistake when the gap clears that noise. Values are in "points", where
    one point is ten spades score points, so roughly one meaningful trick.
+
+## Advice the engine can stand behind
+
+An engine that ranks its candidates by expected value and reads off the top row
+will, sooner or later, tell you to throw away an ace. Not because it thinks the
+ace is worthless — because the plays it was choosing between were level, and
+inside its own margin of error the ranking is not a finding, it is whichever
+card drew the friendlier deals. With a live nil at the table the swing on a
+single deal is ten times the gap between two sensible discards, so "level" is
+the normal case, not an edge case.
+
+So the top row is not the advice. Three rules stand between the simulation and
+what you are told:
+
+- **Nothing is recommended unless it can be proved better than what you played.**
+  Not ranked above it — proved, by a gap that clears the noise.
+- **The proof is tested on deals it was not chosen on.** The run is split in
+  half: one half picks the claim, the other half has to confirm it. Choosing the
+  best-looking card and then testing it against the samples that made it look
+  best is the oldest way there is to find an effect that is not there, and it
+  was worth about one false verdict in six here.
+- **Where plays are genuinely level, the tie goes to judgement, not to sampling
+  error.** Among cards the engine values equally, part with the one you would
+  least miss: not a trump, not the highest card of its suit still unplayed, not
+  the last guard on a king — and on nil, exactly the opposite (`judgment.ts`).
+
+The visible result is that "the engine leans to A♦, but the gap is inside its
+margin of error" is no longer something the app can say. If the gap is inside
+the margin, there is no lean to report.
 
 ## What it is actually maximising
 
@@ -169,6 +201,14 @@ statistically significant margin, measures how stable the Monte Carlo picks are
 at different sample counts, and prints the loss distribution used to calibrate
 the grades.
 
+It also pins one discard position from both ends. Partner leads the ace of
+hearts and is winning the trick, South is void and holding the ace of diamonds,
+and West is on nil: across six seeds, throwing the ace is never the advice and
+the cheap discard is never marked down for keeping it. The same section checks
+the other direction, because refusing to advise inside the noise must not turn
+into refusing to advise at all — the king thrown under partner's ace is still
+called the mistake it is, with a cost the player can see.
+
 ```bash
 npx tsx scripts/playtest.ts
 ```
@@ -204,7 +244,8 @@ lib/spades/
   playstate.ts   the cheap state the simulation mutates
   policy.ts      the rollout policy used inside a playout
   inference.ts   voids shown, and constrained dealing of unseen cards
-  mc.ts          the Monte Carlo evaluator and bid estimator
+  mc.ts          the Monte Carlo evaluator, the two rounds, and the statistics
+  judgment.ts    what a card is worth keeping, for ties the simulation cannot call
   coach.ts       grading and the written explanations
   game.ts        full game state machine and the opponents
 components/      table, hand, coaching panels
