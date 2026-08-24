@@ -26,6 +26,14 @@ import { heuristicChoice } from '../lib/spades/policy';
 import { TrickCard, winningIndex } from '../lib/spades/rules';
 import { reviewPlay } from '../lib/spades/coach';
 
+/** Every card not in this hand - before a card is played, that is the other three seats. */
+function unseenFor(hand: Card[]): Card[] {
+  const mine = new Set(hand);
+  const out: Card[] = [];
+  for (let c = 0; c < 52; c++) if (!mine.has(c)) out.push(c);
+  return out;
+}
+
 const DEALS = 260;
 const SAMPLES = 500;
 const rng = makeRng(31337);
@@ -230,6 +238,7 @@ for (const r of [...rows].sort((a, b) => b.loss - a.loss).slice(0, 5)) {
       tricksWon: [0, 0, 0, 0],
       spadesBroken: false,
       trickNumber: 1,
+      unseen: unseenFor(worst.hand),
     },
     worst.aceCard,
     res

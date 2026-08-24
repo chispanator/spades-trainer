@@ -39,13 +39,17 @@ function ProbBar({ value, label }: { value: number; label: string }) {
 }
 
 function Alternatives({ review }: { review: PlayReview }) {
-  const best = review.ranked[0].ev;
+  const top = review.ranked[0].ev;
+  const tied = new Set(review.tied);
   return (
     <ul className="mt-2 space-y-1.5">
       {review.ranked.slice(0, 7).map((c) => {
-        const loss = best - c.ev;
+        const loss = top - c.ev;
         const isPlayed = c.card === review.played;
         const isBest = c.card === review.best;
+        // Cards inside the margin of error are shown as level rather than
+        // separated by two decimal places the simulation cannot stand behind.
+        const gap = isBest ? 'best' : tied.has(c.card) ? 'level' : `-${loss.toFixed(2)}`;
         return (
           <li
             key={c.card}
@@ -54,9 +58,7 @@ function Alternatives({ review }: { review: PlayReview }) {
             }`}
           >
             <CardChip card={c.card} className="text-[11px]" />
-            <span className="w-16 shrink-0 tabular-nums text-[color:var(--muted)]">
-              {loss <= 0.001 ? 'best' : `-${loss.toFixed(2)}`}
-            </span>
+            <span className="w-16 shrink-0 tabular-nums text-[color:var(--muted)]">{gap}</span>
             <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/8">
               <span
                 className={`block h-full rounded-full ${isBest ? 'bg-emerald-400' : isPlayed ? 'bg-sky-400' : 'bg-white/25'}`}
@@ -144,8 +146,10 @@ export function FeedbackCard({
           {showAll && (
             <>
               <p className="mt-2 text-[11px] text-[color:var(--muted)]">
-                Bars show how often your side makes its contract after each card, over{' '}
-                {review.ranked[0].samples} simulated deals.
+                Bars show how often your side makes its contract after each card. Cards still
+                in contention were measured over {review.ranked[0].samples} deals; the rest were
+                eliminated in a cheaper first round. &ldquo;Level&rdquo; means the gap to the top
+                row is smaller than the simulation&rsquo;s own margin of error.
               </p>
               <Alternatives review={review} />
             </>
