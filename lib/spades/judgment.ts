@@ -1,4 +1,5 @@
-import { Card, Seat, rankOf, suitOf } from './cards';
+import { Card, Seat, partnerOf, rankOf, suitOf } from './cards';
+import { TrickCard, beatsTrick, winningIndex } from './rules';
 
 /**
  * Spades knowledge, used *only* where the simulation runs out of resolution.
@@ -16,6 +17,8 @@ import { Card, Seat, rankOf, suitOf } from './cards';
 export interface TiebreakContext {
   seat: Seat;
   hand: Card[];
+  /** The trick as it stands, which decides whether this rule has anything to say. */
+  trick: TrickCard[];
   /** Needed only to tell a nil apart from a contract; the tie itself is material. */
   bids: number[];
   /** Cards neither played nor in `hand` - what the other three seats still hold. */
@@ -84,14 +87,36 @@ export function keepValue(card: Card, ctx: TiebreakContext): number {
 }
 
 /**
- * Of several plays the simulation rates equally, the one to make.
+ * Is this card being spent for nothing - thrown under a trick it cannot take?
  *
- * The trick itself is not weighed here: the candidates are equal in value by
- * construction, so whatever this trick is worth has already been counted on
- * both sides of the tie. What is left over is the card that leaves your hand,
- * and the cheapest one wins.
+ * Leading is never that: any card can win a trick you are starting. Nor is a
+ * card that would take the lead of the trick as it stands, unless your partner
+ * already holds it, in which case anything you add is spent whatever its rank.
  */
-export function preferAmongEquals(cards: Card[], ctx: TiebreakContext): Card {
+function spentForNothing(card: Card, ctx: TiebreakContext): boolean {
+  if (!ctx.trick.length) return false;
+  const winner = ctx.trick[winningIndex(ctx.trick)];
+  if (winner.seat === partnerOf(ctx.seat)) return true;
+  return !beatsTrick(card, ctx.trick);
+}
+
+/**
+ * Of several plays the simulation rates equally, the one to make - or null
+ * where this rule has no business having an opinion.
+ *
+ * What it knows is one thing: do not throw material away for nothing. That is a
+ * statement about discards, and it holds only while every play on the table is
+ * one. The moment a candidate could take the trick, the card is not being lost,
+ * it is being spent, and what it buys is the trick - which this rule cannot
+ * price and the simulation can. Applying it anyway is how a hoarding bias gets
+ * in: "cannot prove it is worse" is not "worth the same", and at the deal
+ * counts the opponents run on, most plays cannot be told apart at all. Answer
+ * every one of those by keeping the big cards back and you have an engine that
+ * dribbles out spot cards for twelve tricks and cashes its aces at the end.
+ */
+export function preferAmongEquals(cards: Card[], ctx: TiebreakContext): Card | null {
+  if (!cards.length) return null;
+  if (!cards.every((c) => spentForNothing(c, ctx))) return null;
   return cards.reduce((best, c) => {
     const dk = keepValue(c, ctx) - keepValue(best, ctx);
     if (dk !== 0) return dk < 0 ? c : best;

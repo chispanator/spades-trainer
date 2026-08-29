@@ -121,7 +121,7 @@ function provablyBetter(
 }
 
 function tiebreakContext(sit: PlaySituation): TiebreakContext {
-  return { seat: sit.seat, hand: sit.hand, bids: sit.bids, unseen: sit.unseen };
+  return { seat: sit.seat, hand: sit.hand, trick: sit.trick, bids: sit.bids, unseen: sit.unseen };
 }
 
 /**
@@ -161,7 +161,11 @@ export function reviewPlay(
   // Of those, the ones that look better than what was played - on the half of
   // the deals set aside for looking.
   const better = tied.filter((c) => c !== played && provablyBetter(res, c, played, select));
-  const proposed = better.length ? preferAmongEquals(better, tiebreakContext(sit)) : played;
+  // Where the tiebreak has no opinion the cards are not interchangeable, so the
+  // simulation's own order stands - every one of them is already proved better.
+  const proposed = better.length
+    ? preferAmongEquals(better, tiebreakContext(sit)) ?? better[0]
+    : played;
   // ...and then the claim has to survive the half it was not chosen on. This is
   // what stops a card that merely drew a flattering set of deals from being
   // handed to the player as advice.

@@ -299,12 +299,15 @@ export function bestPlay(g: GameState, seat: Seat, res: EvalResult): Card {
     })
     .map((c) => c.card);
   if (tied.length < 2) return leader.card;
-  return preferAmongEquals(tied, {
-    seat,
-    hand: g.hands[seat],
-    bids: numericBids(g),
-    unseen: buildInfoSet(g, seat).unseen,
-  });
+  return (
+    preferAmongEquals(tied, {
+      seat,
+      hand: g.hands[seat],
+      trick: g.trick,
+      bids: numericBids(g),
+      unseen: buildInfoSet(g, seat).unseen,
+    }) ?? leader.card
+  );
 }
 
 /** Grades the human's card against the position it was played into. */

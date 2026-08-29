@@ -355,9 +355,39 @@ function check(ok: boolean, label: string, detail = '') {
   check(markedDown === 0, 'the cheap discard is graded optimal', `(${markedDown}/${seeds.length} marked down)`);
 
   // The tiebreak itself, in isolation.
-  const tctx = { seat: 0 as Seat, hand, bids, unseen };
+  const tctx = { seat: 0 as Seat, hand, trick, bids, unseen };
   const level = [AD, C6, KS, card(0, 10)];
   check(preferAmongEquals(level, tctx) === C6, 'among equals, the spot card goes and the ace stays');
+  check(
+    preferAmongEquals(level, { ...tctx, trick: [] }) === null,
+    'and it declines to answer on a lead, where nothing is being thrown away'
+  );
+  /*
+    The rule is about discards, and saying so is what keeps it from quietly
+    becoming a hoarding bias. "Cannot prove it is worse" is not "worth the
+    same", and at the deal counts the opponents run on almost nothing can be
+    told apart - so a rule that answers every one of those by keeping the big
+    cards back produces a table that dribbles out spot cards and cashes its
+    aces on trick thirteen.
+  */
+  const D2 = card(1, 0);
+  const KD = card(1, 11);
+  const D4 = card(1, 2);
+  check(
+    preferAmongEquals([AD, card(1, 8)], { ...tctx, trick: [{ seat: 1 as Seat, card: D2 }] }) === null,
+    'and declines again when a candidate could take the trick'
+  );
+  check(
+    preferAmongEquals([AD, card(1, 1)], {
+      ...tctx,
+      trick: [
+        { seat: 1 as Seat, card: D2 },
+        { seat: 2 as Seat, card: KD },
+        { seat: 3 as Seat, card: D4 },
+      ],
+    }) === card(1, 1),
+    'but still ducks under a partner who already holds the trick'
+  );
   check(keepValue(AD, tctx) > keepValue(KS, tctx), 'a sure winner outranks a trump that is not one');
   check(
     preferAmongEquals(level, { ...tctx, bids: [0, 3, 5, 3] }) === KS,
