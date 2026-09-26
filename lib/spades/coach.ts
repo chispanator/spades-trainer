@@ -12,7 +12,18 @@ import {
   teamOf,
 } from './cards';
 import { TrickCard, beatsTrick, legalMoves, winningIndex } from './rules';
-import { CandidateEval, EvalResult, TrickEstimate, BidBreakdown, pairedDifference } from './mc';
+import {
+  CandidateEval,
+  EvalResult,
+  TrickEstimate,
+  BidBreakdown,
+  CONFIDENCE_Z,
+  NOISE_FLOOR,
+  confirmationHalf,
+  pairedDifference,
+  selectionHalf,
+} from './mc';
+import { TiebreakContext, isSureWinner, preferAmongEquals } from './judgment';
 
 export type Grade = 'optimal' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
 
@@ -45,6 +56,8 @@ export interface PlaySituation {
   tricksWon: number[];
   spadesBroken: boolean;
   trickNumber: number; // 1-13
+  /** Cards neither played nor in hand. Needed to tell a winner from a spot card. */
+  unseen: Card[];
 }
 
 export interface PlayReview {
@@ -56,8 +69,13 @@ export interface PlayReview {
   loss: number;
   stdError: number;
   significant: boolean;
-  /** The engine leans elsewhere, but the gap is inside its own margin of error. */
+  /**
+   * The simulation's top row is a different card, but it cannot show that card
+   * is better - so nothing is recommended and this is said instead of advice.
+   */
   withinNoise: boolean;
+  /** Cards the simulation could not tell apart, best row first. */
+  tied: Card[];
   playedEval: CandidateEval;
   bestEval: CandidateEval;
   ranked: CandidateEval[];
@@ -91,10 +109,33 @@ function gradeFor(loss: number, significant: boolean): Grade {
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
+/** Is A better than B by more than the simulation's own margin of error? */
+function provablyBetter(
+  res: EvalResult,
+  a: Card,
+  b: Card,
+  window?: { from: number; to: number }
+): boolean {
+  const d = pairedDifference(res, a, b, window);
+  return d.mean > NOISE_FLOOR && d.mean > CONFIDENCE_Z * d.stdError;
+}
+
+function tiebreakContext(sit: PlaySituation): TiebreakContext {
+  return { seat: sit.seat, hand: sit.hand, bids: sit.bids, unseen: sit.unseen };
+}
+
 /**
  * Turns one decision into a grade plus an explanation. The grade comes from the
  * simulation; the words come from reading the position, so the advice says
  * *why* rather than only *how much*.
+ *
+ * The card it recommends is chosen under one rule: never name a card unless the
+ * simulation can prove it beats the one that was played. Sorting by expected
+ * value and reading off the top row does not clear that bar - the top row of a
+ * dozen noisy estimates is partly just the luckiest sample - and it is how a
+ * trainer ends up telling a player to throw an ace away over a gap it admits in
+ * the same breath is inside its own margin of error. Where several plays are
+ * genuinely level, the tie goes to spades judgement instead, in judgment.ts.
  */
 export function reviewPlay(
   sit: PlaySituation,
@@ -102,34 +143,70 @@ export function reviewPlay(
   res: EvalResult
 ): PlayReview {
   const ranked = res.candidates;
-  const best = ranked[0];
-  const playedEval = ranked.find((c) => c.card === played) ?? best;
-  const diff = pairedDifference(res, best.card, played);
-  const loss = Math.max(0, diff.mean);
-  // Demand the gap clear the engine's own noise before calling it an error.
-  const meaningful = loss > 0.1;
-  const significant = meaningful && loss > 1.96 * diff.stdError;
-  const withinNoise = meaningful && !significant;
-  const grade = gradeFor(loss, significant);
+  const leader = ranked[0];
   const hadChoice = ranked.length > 1;
+
+  // Everything the simulation cannot separate from its own top row. These are
+  // the plays that are still in contention; the ordering within them is not.
+  // Only cards carried through to the final round are eligible: a card dropped
+  // earlier was dropped for being measurably worse, and it has no paired
+  // samples left to argue with.
+  const select = selectionHalf(res);
+  const confirm = confirmationHalf(res);
+  const tied = ranked
+    .filter((c) => res.rowOf.has(c.card))
+    .filter((c) => c.card === leader.card || !provablyBetter(res, leader.card, c.card, select))
+    .map((c) => c.card);
+
+  // Of those, the ones that look better than what was played - on the half of
+  // the deals set aside for looking.
+  const better = tied.filter((c) => c !== played && provablyBetter(res, c, played, select));
+  const proposed = better.length ? preferAmongEquals(better, tiebreakContext(sit)) : played;
+  // ...and then the claim has to survive the half it was not chosen on. This is
+  // what stops a card that merely drew a flattering set of deals from being
+  // handed to the player as advice.
+  const confirmed = proposed !== played && provablyBetter(res, proposed, played, confirm);
+
+  // A played card with no paired samples was knocked out in the first round,
+  // which is a verdict of its own. Callers hand it to `include` so this does not
+  // normally happen; falling through to "optimal" if it ever did would be the
+  // one wrong way to be careful.
+  const eliminated = !res.rowOf.has(played);
+  const best = confirmed || eliminated ? (proposed === played ? leader.card : proposed) : played;
+
+  const playedEval = ranked.find((c) => c.card === played) ?? leader;
+  const bestEval = ranked.find((c) => c.card === best) ?? playedEval;
+  const diff =
+    best === played
+      ? { mean: 0, stdError: 0 }
+      : eliminated
+        ? { mean: bestEval.ev - playedEval.ev, stdError: 0 }
+        : pairedDifference(res, best, played);
+  const loss = Math.max(0, diff.mean);
+  const significant = best !== played;
+  // The engine has a preference it cannot back up. Worth saying out loud rather
+  // than dressing up as advice.
+  const withinNoise = best === played && hadChoice && leader.card !== played;
+  const grade = gradeFor(loss, significant);
 
   // Ordered most specific first, then capped: a wall of bullets reads as noise.
   const notes = hadChoice
-    ? buildNotes(sit, played, best.card, playedEval, best, grade, ranked).slice(0, 5)
+    ? buildNotes(sit, played, best, playedEval, bestEval, grade, ranked, tied).slice(0, 5)
     : [];
-  const headline = buildHeadline(grade, played, best.card, loss, hadChoice, withinNoise);
+  const headline = buildHeadline(grade, played, best, loss, hadChoice, withinNoise, tied.length);
 
   return {
     trickNumber: sit.trickNumber,
     played,
-    best: best.card,
+    best,
     grade,
     loss,
     stdError: diff.stdError,
     significant,
     withinNoise,
+    tied,
     playedEval,
-    bestEval: best,
+    bestEval,
     ranked,
     headline,
     notes,
@@ -144,12 +221,15 @@ function buildHeadline(
   best: Card,
   loss: number,
   hadChoice: boolean,
-  withinNoise: boolean
+  withinNoise: boolean,
+  tiedCount: number
 ): string {
   if (!hadChoice) return `Forced — ${cardName(played)} was your only legal card.`;
-  if (played === best) return `Optimal — ${cardName(played)} is the top play.`;
-  if (withinNoise) {
-    return `Close call — the engine leans to ${cardName(best)}, but the gap is inside its margin of error.`;
+  if (played === best) {
+    if (withinNoise && tiedCount > 1) {
+      return `Optimal — nothing here beats ${cardName(played)} by more than the engine can measure.`;
+    }
+    return `Optimal — ${cardName(played)} is the top play.`;
   }
   switch (grade) {
     case 'optimal':
@@ -172,7 +252,8 @@ function buildNotes(
   playedEval: CandidateEval,
   bestEval: CandidateEval,
   grade: Grade,
-  ranked: CandidateEval[]
+  ranked: CandidateEval[],
+  tied: Card[]
 ): string[] {
   const notes: string[] = [];
   const { seat, trick, bids, tricksWon, hand } = sit;
@@ -202,6 +283,25 @@ function buildNotes(
   const oppNil = [1, 3]
     .map((o) => ((seat + o) % 4) as Seat)
     .filter((o) => bids[o] === 0 && tricksWon[o] === 0);
+
+  // ---- the engine has a preference it cannot back up ----
+  // First, because a top row that disagrees with you is the thing you notice,
+  // and the honest answer is that the disagreement is smaller than the noise.
+  if (best === played && tied.length > 1 && ranked[0].card !== played) {
+    const leader = ranked[0].card;
+    const gap = (ranked[0].ev - playedEval.ev).toFixed(2);
+    const wouldThrowAWinner =
+      !iAmNil && !beatsTrick(leader, trick) && isSureWinner(leader, sit.unseen);
+    if (wouldThrowAWinner) {
+      notes.push(
+        `The engine's top row is ${cardName(leader)}, ahead by ${gap} points — inside its own margin of error over ${playedEval.samples} deals, so that ordering is sampling noise and not a finding. ${cardName(leader)} is the highest ${SUIT_NAME[suitOf(leader)].toLowerCase()} nobody has played: a trick in your hand for as long as you hold it, and nothing at all once you throw it under a trick you were never going to win. Where the numbers come out level, keep the card that wins something.`
+      );
+    } else {
+      notes.push(
+        `${tied.length} cards come out level here. The engine puts ${cardName(leader)} ${gap} points ahead of ${cardName(played)}, which is inside its margin of error over ${playedEval.samples} deals — there is nothing to fix.`
+      );
+    }
+  }
 
   // ---- nil situations dominate everything else ----
   if (iAmNil) {
@@ -243,6 +343,13 @@ function buildNotes(
         `Partner's ${cardName(winCard)} already had the trick and ${safe}. ${cardName(played)} is wasted under it — ${cardName(best)} keeps the big card for a trick you actually need.`
       );
     }
+  }
+
+  // ---- threw a winner away ----
+  if (!leading && !iAmNil && !playedTakesLead && best !== played && isSureWinner(played, sit.unseen)) {
+    notes.push(
+      `${cardName(played)} is the highest ${SUIT_NAME[suitOf(played)].toLowerCase()} still out. Held, it wins a trick whenever the suit comes round; spent here it won nothing, and ${cardName(best)} would have cost you nothing to throw.`
+    );
   }
 
   // ---- winning versus ducking ----

@@ -7,10 +7,19 @@
  * can be set against real numbers rather than guesses.
  */
 import { Card, Seat, cardName, dealDeck, makeRng, sortForDisplay, suitOf } from '../lib/spades/cards';
-import { legalMoves, scoreTeamHand } from '../lib/spades/rules';
+import { TrickCard, legalMoves, scoreTeamHand } from '../lib/spades/rules';
 import { PlayState, applyCard, isTerminal } from '../lib/spades/playstate';
 import { heuristicChoice } from '../lib/spades/policy';
-import { bidBreakdown, estimateTricks, evaluatePlays, pairedDifference } from '../lib/spades/mc';
+import {
+  bidBreakdown,
+  estimateTricks,
+  evaluatePlays,
+  evaluateWithRunoff,
+  pairedDifference,
+} from '../lib/spades/mc';
+import { isSureWinner, keepValue, preferAmongEquals } from '../lib/spades/judgment';
+import { PlaySituation, reviewPlay } from '../lib/spades/coach';
+import { COACH_FINALISTS, COACH_RUNOFF, coachSamples } from '../lib/spades/game';
 import { deriveVoids, emptyVoids } from '../lib/spades/inference';
 
 let failures = 0;
@@ -263,6 +272,264 @@ function check(ok: boolean, label: string, detail = '') {
     `        median ${q(0.5).toFixed(2)}  p75 ${q(0.75).toFixed(2)}  p90 ${q(0.9).toFixed(2)}  p97 ${q(0.97).toFixed(2)}  max ${q(1).toFixed(2)}`
   );
   check(losses.length > 100, 'calibration collected enough decisions');
+}
+
+// ------------------------------------- 8. advice the engine can stand behind --
+/*
+  A discard position taken from a real game: partner leads the ace of hearts and
+  is winning the trick, East follows small, South is void in hearts and has to
+  throw something. South holds the ace of diamonds - the highest diamond nobody
+  has played - alongside a fistful of spot cards.
+
+  Throwing the ace away is the one play in the position that costs a trick for
+  nothing, and it is exactly what an engine recommends when it sorts a dozen
+  noisy estimates and reads off the top row. The gaps between the sensible
+  discards are far smaller than the swing a live nil puts on a single deal, so
+  the ordering among them is sampling error. These checks pin the two things
+  that have to hold: the ace is never the advice, and the cheap discard is never
+  marked down for it.
+*/
+{
+  const card = (suit: number, rank: number): Card => suit * 13 + rank;
+  const AH = card(2, 12);
+  const H4 = card(2, 2);
+  const AD = card(1, 12);
+  const C6 = card(0, 4);
+  const KS = card(3, 11);
+
+  const hand: Card[] = [
+    card(3, 11), card(3, 5), card(3, 2),
+    card(1, 12), card(1, 8), card(1, 3), card(1, 1),
+    card(0, 10), card(0, 7), card(0, 4), card(0, 2), card(0, 0),
+  ];
+  const trick = [
+    { seat: 2 as Seat, card: AH },
+    { seat: 3 as Seat, card: H4 },
+  ];
+  const seen = new Set<Card>([...hand, AH, H4]);
+  const unseen: Card[] = [];
+  for (let c = 0; c < 52; c++) if (!seen.has(c)) unseen.push(c);
+  const voids = emptyVoids();
+  voids[0][2] = true; // South showed out of hearts
+
+  const bids = [3, 0, 5, 3]; // West is on nil, which is where the variance comes from
+  const ctx = {
+    info: { observer: 0 as Seat, hand, handSizes: [12, 12, 12, 12], voids, unseen },
+    bids,
+    trick,
+    tricksWon: [0, 0, 1, 0],
+    spadesBroken: false,
+    bagsBefore: [0, 0] as [number, number],
+  };
+  const sit: PlaySituation = {
+    seat: 0,
+    hand,
+    trick,
+    bids,
+    tricksWon: [0, 0, 1, 0],
+    spadesBroken: false,
+    trickNumber: 2,
+    unseen,
+  };
+
+  check(isSureWinner(AD, unseen), 'the ace of diamonds is read as the best diamond still out');
+  check(!isSureWinner(C6, unseen), 'a spot card is not read as a winner');
+
+  let advisedTheAce = 0;
+  let markedDown = 0;
+  const seeds = [4242, 1, 77, 909, 5150, 31337];
+  for (const seed of seeds) {
+    const res = evaluateWithRunoff(ctx, {
+      samples: coachSamples(12),
+      runoff: COACH_RUNOFF,
+      finalists: COACH_FINALISTS,
+      include: [C6],
+      seed,
+    });
+    check(res.rowOf.has(C6), `the played card reaches the final round (seed ${seed})`);
+    const review = reviewPlay(sit, C6, res);
+    if (review.best === AD) advisedTheAce++;
+    if (review.grade !== 'optimal') markedDown++;
+  }
+  check(advisedTheAce === 0, 'throwing the ace is never the advice', `(${advisedTheAce}/${seeds.length})`);
+  check(markedDown === 0, 'the cheap discard is graded optimal', `(${markedDown}/${seeds.length} marked down)`);
+
+  // The tiebreak itself, in isolation.
+  const tctx = { seat: 0 as Seat, hand, bids, unseen };
+  const level = [AD, C6, KS, card(0, 10)];
+  check(preferAmongEquals(level, tctx) === C6, 'among equals, the spot card goes and the ace stays');
+  check(keepValue(AD, tctx) > keepValue(KS, tctx), 'a sure winner outranks a trump that is not one');
+  check(
+    preferAmongEquals(level, { ...tctx, bids: [0, 3, 5, 3] }) === KS,
+    'on nil the ranking inverts and the most dangerous card goes'
+  );
+
+  // Guarding: the small card next to a bare king is worth more than its rank.
+  const guardHand = [card(1, 11), card(1, 1), card(0, 4), card(0, 2), card(0, 0)];
+  const gctx = { ...tctx, hand: guardHand };
+  check(
+    preferAmongEquals([card(1, 1), card(0, 2)], gctx) === card(0, 2),
+    'the last guard on a king is kept ahead of a spare spot card'
+  );
+}
+
+// --------------------------------- 8b. how short can the short list be? ----
+/*
+  The first round only has to answer "which cards are still in this?", so it can
+  be cheap - but not so cheap that the genuinely best card never reaches the
+  round that would have found it. This is the sweep COACH_FINALISTS comes from:
+  what matters is the width of the short list, not the deals spent picking it.
+*/
+{
+  const positions: { ctx: Parameters<typeof evaluatePlays>[0]; legal: Card[] }[] = [];
+  const rng = makeRng(4711);
+  for (let d = 0; d < 300 && positions.length < 8; d++) {
+    const dealt = dealDeck(rng);
+    const bids = [3, 0, 5, 3]; // nil live, where the noise is worst
+    const st: PlayState = {
+      hands: dealt,
+      bids,
+      turn: 1,
+      trick: [],
+      spadesBroken: false,
+      tricksWon: [0, 0, 0, 0],
+      bagsBefore: [0, 0],
+    };
+    const done: TrickCard[][] = [];
+    let cur: TrickCard[] = [];
+    while (st.hands[0].length > 10 || st.turn !== 0 || st.trick.length !== 0) {
+      if (st.hands[0].length <= 6) break;
+      const actor = st.turn;
+      const before = st.trick.slice();
+      const c = heuristicChoice(st);
+      applyCard(st, c);
+      cur = [...before, { seat: actor, card: c }];
+      if (st.trick.length === 0) {
+        done.push(cur);
+        cur = [];
+      }
+    }
+    if (st.turn !== 0 || st.trick.length !== 0) continue;
+    const hand = st.hands[0];
+    const legal = legalMoves(hand, st.trick, st.spadesBroken);
+    if (legal.length < 7) continue;
+    const seen = new Set<Card>(hand);
+    for (const t of done) for (const tc of t) seen.add(tc.card);
+    const unseen: Card[] = [];
+    for (let c = 0; c < 52; c++) if (!seen.has(c)) unseen.push(c);
+    positions.push({
+      ctx: {
+        info: {
+          observer: 0 as Seat,
+          hand,
+          handSizes: [0, 1, 2, 3].map((x) => st.hands[x].length),
+          voids: deriveVoids(done),
+          unseen,
+        },
+        bids,
+        trick: st.trick,
+        tricksWon: st.tricksWon,
+        spadesBroken: st.spadesBroken,
+        bagsBefore: [0, 0],
+      },
+      legal,
+    });
+  }
+
+  const truth = positions.map((p, i) => evaluatePlays(p.ctx, 2500, 90001 + i).candidates[0].card);
+  const hitsAt = (cap: number) => {
+    let hits = 0;
+    positions.forEach((p, i) => {
+      const first = evaluatePlays(p.ctx, coachSamples(p.legal.length), 5000 + i);
+      const leader = first.candidates[0].card;
+      const short: Card[] = [];
+      for (const c of first.candidates) {
+        if (c.card === leader) {
+          short.push(c.card);
+          continue;
+        }
+        if (short.length >= cap) break;
+        const d = pairedDifference(first, leader, c.card);
+        if (d.mean <= Math.max(0.1, 2.58 * d.stdError)) short.push(c.card);
+      }
+      if (short.includes(truth[i])) hits++;
+    });
+    return hits;
+  };
+  const narrow = hitsAt(3);
+  const chosen = hitsAt(COACH_FINALISTS);
+  console.log(
+    `      short list keeps the best card: ${narrow}/${positions.length} at 3 finalists, ${chosen}/${positions.length} at ${COACH_FINALISTS}`
+  );
+  check(positions.length >= 5, 'sweep found enough wide-open positions', `(${positions.length})`);
+  check(chosen >= positions.length - 1, 'the short list keeps the best card', `(${chosen}/${positions.length})`);
+  check(chosen >= narrow, 'and a wider short list is never worse than a narrow one');
+}
+
+// --------------------------- 9. real mistakes are still called out --------
+// The safety net on section 8: refusing to advise inside the noise must not
+// turn into refusing to advise at all. The king thrown under partner's ace is
+// a genuine error and has to survive the whole pipeline as one.
+{
+  const KH = 37;
+  const AH = 38;
+  const H3 = 27;
+  const H4 = 28;
+  const hands = dealDeck(makeRng(5150));
+  const place = (c: Card, seat: Seat) => {
+    const from = hands.findIndex((h) => h.includes(c));
+    if (from === seat) return;
+    const swapOut = hands[seat][0];
+    hands[from][hands[from].indexOf(c)] = swapOut;
+    hands[seat][0] = c;
+  };
+  place(KH, 0);
+  place(AH, 2);
+  place(H3, 1);
+  place(H4, 3);
+  const trick = [
+    { seat: 1 as Seat, card: H3 },
+    { seat: 2 as Seat, card: AH },
+    { seat: 3 as Seat, card: H4 },
+  ];
+  for (const tc of trick) hands[tc.seat].splice(hands[tc.seat].indexOf(tc.card), 1);
+
+  const hand = hands[0];
+  const seen = new Set<Card>([...hand, ...trick.map((t) => t.card)]);
+  const unseen: Card[] = [];
+  for (let c = 0; c < 52; c++) if (!seen.has(c)) unseen.push(c);
+  const bids = [3, 3, 3, 4];
+  const ctx = {
+    info: {
+      observer: 0 as Seat,
+      hand,
+      handSizes: [0, 1, 2, 3].map((s) => hands[s].length),
+      voids: emptyVoids(),
+      unseen,
+    },
+    bids,
+    trick,
+    tricksWon: [0, 0, 0, 0],
+    spadesBroken: false,
+    bagsBefore: [0, 0] as [number, number],
+  };
+  const legal = hand.filter((c) => suitOf(c) === 2).length;
+  const res = evaluateWithRunoff(ctx, {
+    samples: coachSamples(legal),
+    runoff: COACH_RUNOFF,
+    finalists: COACH_FINALISTS,
+    include: [KH],
+    seed: 5150,
+  });
+  const review = reviewPlay(
+    { seat: 0, hand, trick, bids, tricksWon: [0, 0, 0, 0], spadesBroken: false, trickNumber: 1, unseen },
+    KH,
+    res
+  );
+  console.log(`      king under the ace: graded ${review.grade}, costs ${review.loss.toFixed(2)} pts, advice ${cardName(review.best)}`);
+  check(review.best !== KH, 'the king under partner’s ace is still called an error');
+  check(review.grade !== 'optimal', 'and it is still graded as one');
+  check(review.loss > 0.1, 'with a cost the player can see', `(${review.loss.toFixed(2)})`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

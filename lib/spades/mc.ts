@@ -60,9 +60,16 @@ function stateFrom(ctx: EvalContext, hands: Card[][]): PlayState {
  * against that same layout (common random numbers). Pairing the samples makes a
  * comparison between two cards far less noisy than evaluating each separately.
  */
-export function evaluatePlays(ctx: EvalContext, samples: number, seed = 12345): EvalResult {
+export function evaluatePlays(
+  ctx: EvalContext,
+  samples: number,
+  seed = 12345,
+  only?: Card[]
+): EvalResult {
   const { info } = ctx;
-  const legal = legalMoves(info.hand, ctx.trick, ctx.spadesBroken);
+  const all = legalMoves(info.hand, ctx.trick, ctx.spadesBroken);
+  const keep = only ? new Set(only) : null;
+  const legal = keep ? all.filter((c) => keep.has(c)) : all;
   const team = teamOf(info.observer);
   const opp = (team === 0 ? 1 : 0) as 0 | 1;
   const rng: RNG = makeRng(seed);
@@ -135,28 +142,134 @@ export function evaluatePlays(ctx: EvalContext, samples: number, seed = 12345): 
 }
 
 /**
+ * How many standard errors a gap must clear before one play is called better
+ * than another.
+ *
+ * 1.96 is the usual 95% figure and it is the wrong one wherever the card being
+ * compared was not chosen in advance - and in a short list it never is, it is
+ * the best-looking of five. Test the winner of five comparisons at 95% and the
+ * whole set is wrong about one time in five. Spreading that same 95% across
+ * five looks gives 2.58.
+ *
+ * The coach also splits its deals so the claim is confirmed on samples it was
+ * not chosen on, which removes that bias outright rather than budgeting for it.
+ * Keeping the wider bar on top of the split is deliberate: a trainer that says
+ * nothing costs the player nothing, and one that says the wrong thing does.
+ */
+export const CONFIDENCE_Z = 2.58;
+
+/** The gap two plays must show before the difference is worth mentioning. */
+export const NOISE_FLOOR = 0.1;
+
+export interface RunoffOptions {
+  /** First round, spent across every legal card. */
+  samples: number;
+  /** Second round, spent only on the cards still in contention. */
+  runoff: number;
+  /** How many cards reach the second round. */
+  finalists?: number;
+  /** Cards that must reach the second round whatever the first round said. */
+  include?: Card[];
+  seed?: number;
+}
+
+/**
+ * Two rounds, so the answer is not the argmax of a dozen noisy numbers.
+ *
+ * Ranking N candidates by N independent estimates has a bias nobody expects the
+ * first time they meet it: the top row is the one whose sampling error happened
+ * to be most flattering, so it is both wrong more often than the error bars
+ * suggest and reported too high. With a live nil at the table the swing on a
+ * single deal is ten times the difference between two sensible discards, and
+ * that bias is the whole ranking.
+ *
+ * The cure is to stop spreading the budget evenly. A cheap first round only has
+ * to answer "which cards are still in this?", and the cards it eliminates were
+ * beaten by more than the noise. Everything saved on them is then spent on the
+ * short list, where the differences are small enough to need it.
+ */
+export function evaluateWithRunoff(ctx: EvalContext, opts: RunoffOptions): EvalResult {
+  const seed = opts.seed ?? 12345;
+  const first = evaluatePlays(ctx, opts.samples, seed);
+  const cap = Math.max(2, opts.finalists ?? 4);
+  if (first.candidates.length < 2) return first;
+
+  const leader = first.candidates[0].card;
+  const contenders: Card[] = [];
+  for (const c of first.candidates) {
+    if (c.card === leader) {
+      contenders.push(c.card);
+      continue;
+    }
+    if (contenders.length >= cap) break;
+    // Keep anything the first round could not prove worse than the leader.
+    const d = pairedDifference(first, leader, c.card);
+    if (d.mean <= Math.max(NOISE_FLOOR, CONFIDENCE_Z * d.stdError)) contenders.push(c.card);
+  }
+  for (const c of opts.include ?? []) {
+    if (!contenders.includes(c) && first.rowOf.has(c)) contenders.push(c);
+  }
+  if (contenders.length < 2) contenders.push(first.candidates[1].card);
+  if (contenders.length === first.candidates.length && opts.runoff <= opts.samples) return first;
+
+  const second = evaluatePlays(ctx, opts.runoff, seed + 1, contenders);
+  const inRunoff = new Set(contenders);
+  // Cards knocked out in the first round keep their coarse numbers and stay
+  // below the finalists: they were measured less carefully, so letting a stale
+  // estimate jump back to the top is exactly the error this is here to avoid.
+  const eliminated = first.candidates.filter((c) => !inRunoff.has(c.card));
+  return {
+    candidates: [...second.candidates, ...eliminated],
+    samples: second.samples,
+    utilities: second.utilities,
+    rowOf: second.rowOf,
+  };
+}
+
+/**
  * Mean and standard error of (value of A minus value of B) over the shared
  * samples. Used so the coach never grades a gap smaller than its own noise.
  */
 export function pairedDifference(
   res: EvalResult,
   cardA: Card,
-  cardB: Card
+  cardB: Card,
+  window?: { from: number; to: number }
 ): { mean: number; stdError: number } {
   const ia = res.rowOf.get(cardA);
   const ib = res.rowOf.get(cardB);
   if (ia === undefined || ib === undefined || res.samples === 0) return { mean: 0, stdError: 0 };
   const n = res.samples;
+  const from = Math.max(0, window?.from ?? 0);
+  const to = Math.min(n, window?.to ?? n);
+  const count = to - from;
+  if (count <= 1) return { mean: 0, stdError: 0 };
   let sum = 0;
   let sumSq = 0;
-  for (let s = 0; s < n; s++) {
+  for (let s = from; s < to; s++) {
     const d = res.utilities[ia * n + s] - res.utilities[ib * n + s];
     sum += d;
     sumSq += d * d;
   }
-  const mean = sum / n;
-  const variance = Math.max(0, sumSq / n - mean * mean);
-  return { mean, stdError: Math.sqrt(variance / n) };
+  const mean = sum / count;
+  const variance = Math.max(0, sumSq / count - mean * mean);
+  return { mean, stdError: Math.sqrt(variance / count) };
+}
+
+/**
+ * The two halves of a run: one to choose a claim on, one to test it on.
+ *
+ * Choosing the best-looking card and then testing it against the very samples
+ * that made it look best is the oldest way there is to find an effect that is
+ * not there. The deals are independent, so splitting them costs nothing but
+ * precision, and what comes back the other side is an honest test of a claim
+ * that was fixed before those deals were looked at.
+ */
+export function selectionHalf(res: EvalResult): { from: number; to: number } {
+  return { from: 0, to: Math.floor(res.samples / 2) };
+}
+export function confirmationHalf(res: EvalResult): { from: number; to: number } {
+  return { from: Math.floor(res.samples / 2), to: res.samples };
 }
 
 // ------------------------------------------------------------- bid support --

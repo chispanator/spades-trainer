@@ -13,6 +13,14 @@ import { evaluatePlays } from '../lib/spades/mc';
 import { reviewPlay } from '../lib/spades/coach';
 import { emptyVoids } from '../lib/spades/inference';
 
+/** Every card not in this hand - before a card is played, that is the other three seats. */
+function unseenFor(hand: Card[]): Card[] {
+  const mine = new Set(hand);
+  const out: Card[] = [];
+  for (let c = 0; c < 52; c++) if (!mine.has(c)) out.push(c);
+  return out;
+}
+
 const KH = 37, JH = 35, H4 = 28;
 const HAND: Card[] = [
   KH, JH, H4, // K J 4 of hearts - the holding under test
@@ -87,6 +95,7 @@ const review = reviewPlay(
     tricksWon: [0, 0, 0, 0],
     spadesBroken: false,
     trickNumber: 1,
+    unseen: unseenFor(HAND),
   },
   JH,
   res
