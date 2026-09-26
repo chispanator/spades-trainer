@@ -77,6 +77,41 @@ sound. But leading hearts at all returns *fewer* heart tricks than leaving the
 suit alone — the promotion does not pay for itself, and the coach says so with
 those numbers rather than asserting a rule.
 
+### Partnering a nil
+
+Covering a partner's nil is the one situation where the right play is obvious to
+a human and easy for an engine to get catastrophically wrong. Two bugs lived in
+the rollout policy:
+
+- **It never rescued the nil.** When the nil bidder was winning a trick, the
+  partner ducked — reading "partner is winning" as good news, when for a nil it
+  is the one thing that must not happen. Measured at **0 rescues out of 8**.
+- **It led low.** With no ace or king to hand it fell through to leading from its
+  shortest suit, leaving the trick alive for the one player who must not take it.
+
+The policy now leads its highest card when partner is on a live nil, takes the
+trick off them whenever it legally can, and — when the nil bidder has yet to play
+— wins as high as possible so they can throw their most dangerous card under it.
+
+A third problem sat underneath both: **the determinizer ignored bids.** Dealing
+the unseen cards at random put aces in the nil bidder's hand, so the simulation
+concluded the nil was hopeless and stopped protecting it. Bids are public, so
+using them is inference rather than cheating; a nil bidder is now steered away
+from high cards when hands are dealt (`nilAffinity` in `inference.ts`).
+
+`scripts/niltest.ts` measures the result over 60 genuine nil hands. It overrides
+each seat's difficulty independently, because the difficulty setting drives all
+three AI seats at once — comparing settings directly conflates "better partner"
+with "better opponents", which is exactly the trap that made the fix first look
+like a regression.
+
+```
+opponents held at "intermediate", only the partner varies:
+  partner as beginner    : nil made 53%, rescued 22/22
+  partner as intermediate: nil made 53%, rescued 15/15
+  partner as advanced    : nil made 63%, rescued 26/26
+```
+
 ### "Always cash your aces"
 
 The most common rule players bring to spades, and the guarantee behind it is

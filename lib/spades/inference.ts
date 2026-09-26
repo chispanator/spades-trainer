@@ -1,4 +1,4 @@
-import { Card, RNG, Seat, shuffle, suitOf } from './cards';
+import { Card, RNG, Seat, rankOf, shuffle, suitOf } from './cards';
 import { TrickCard } from './rules';
 
 export type VoidTable = boolean[][]; // [seat][suit]
@@ -37,7 +37,22 @@ export interface InfoSet {
   voids: VoidTable;
   /** Cards not yet played and not in the observer's hand. */
   unseen: Card[];
+  /**
+   * Bids, when known. A bid is public information and says a great deal about a
+   * hand — above all that a nil bidder is very unlikely to hold high cards.
+   * Dealing without it makes the simulation imagine aces in the nil bidder's
+   * hand and conclude the nil is hopeless, which is how a partner ends up
+   * playing as though there were nothing to protect.
+   */
+  bids?: number[];
 }
+
+/**
+ * How much a seat that bid nil "wants" a card of this rank. Not a probability,
+ * just a relative weight: an ace is roughly a tenth as likely to sit with the
+ * nil bidder as a deuce is.
+ */
+const nilAffinity = (rank: number) => Math.pow(0.82, rank);
 
 /**
  * Randomly assigns the unseen cards to the other three seats, respecting hand
@@ -90,19 +105,25 @@ function tryDeal(info: InfoSet, targets: Seat[], rng: RNG, ignoreVoids: boolean)
     if (outstanding === 0) break; // more unseen cards than seats to fill
     let total = 0;
     const opts: Seat[] = [];
+    const weights: number[] = [];
     for (const s of targets) {
       if (need[s] <= 0) continue;
       if (!ignoreVoids && info.voids[s][suitOf(c)]) continue;
+      // Seats still needing many cards take proportionally more of them, and a
+      // nil bidder is steered away from the high ones.
+      let w = need[s];
+      if (info.bids && info.bids[s] === 0) w *= nilAffinity(rankOf(c));
       opts.push(s);
-      total += need[s];
+      weights.push(w);
+      total += w;
     }
     if (!opts.length) return null;
     let r = rng() * total;
     let chosen = opts[opts.length - 1];
-    for (const s of opts) {
-      r -= need[s];
+    for (let i = 0; i < opts.length; i++) {
+      r -= weights[i];
       if (r <= 0) {
-        chosen = s;
+        chosen = opts[i];
         break;
       }
     }

@@ -191,6 +191,7 @@ export function buildInfoSet(g: GameState, seat: Seat): InfoSet {
     handSizes: [0, 1, 2, 3].map((s) => g.hands[s].length),
     voids: deriveVoids([...g.completedTricks.map((t) => t.cards), g.trick]),
     unseen,
+    bids: numericBids(g),
   };
 }
 

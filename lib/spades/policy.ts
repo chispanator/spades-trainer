@@ -79,10 +79,19 @@ export function heuristicChoice(st: PlayState): Card {
 
   const iAmNil = st.bids[seat] === 0;
   const want = wantsTrick(st, seat);
+  const mate = partnerOf(seat);
+  const partnerLiveNil = st.bids[mate] === 0 && st.tricksWon[mate] === 0;
 
   // ---- leading ----
   if (st.trick.length === 0) {
     if (iAmNil) return lowestKeepSpades(legal);
+    if (partnerLiveNil) {
+      // Partner is on nil. Lead your biggest card: taking the trick yourself
+      // keeps it away from them, and it hands them a free chance to throw the
+      // card most likely to bust them. Leading low does the opposite - it
+      // leaves the trick alive for the one player who must not win it.
+      return highestKeepSpades(legal);
+    }
     if (!want || oppNilAlive(st, seat)) return lowestKeepSpades(legal);
 
     const sideAces = legal.filter((c) => rankOf(c) === 12 && suitOf(c) !== 3);
@@ -114,6 +123,13 @@ export function heuristicChoice(st: PlayState): Card {
     return highest(legal); // forced to win anyway - dump the biggest problem
   }
 
+  if (partnerWinning && partnerLiveNil) {
+    // Partner is on nil and is about to take the trick. Taking it off them is
+    // the entire job - worth any card we hold, since a busted nil is -100.
+    if (winners.length) return lowest(winners);
+    return lowestKeepSpades(legal);
+  }
+
   if (partnerWinning) {
     // Partner has it. Duck cheaply unless we are chasing bags we do not want.
     if (isLast) return lowestKeepSpades(legal);
@@ -126,7 +142,13 @@ export function heuristicChoice(st: PlayState): Card {
   }
 
   if (want) {
-    if (winners.length) return lowest(winners);
+    if (winners.length) {
+      // A live nil partner who has yet to play can throw their most dangerous
+      // card under a big winner, so win it as high as we can rather than as
+      // cheaply as possible.
+      if (partnerLiveNil && !st.trick.some((t) => t.seat === mate)) return highest(winners);
+      return lowest(winners);
+    }
     return lowestKeepSpades(legal);
   }
 
