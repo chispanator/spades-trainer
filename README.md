@@ -147,10 +147,19 @@ like a regression.
 
 ```
 opponents held at "intermediate", only the partner varies:
-  partner as beginner    : nil made 53%, rescued 22/22
-  partner as intermediate: nil made 53%, rescued 15/15
-  partner as advanced    : nil made 63%, rescued 26/26
+  partner as beginner    : nil made 33%, rescued 37/37, leads rank 9.3
+  partner as intermediate: nil made 38%, rescued 39/41, leads rank 9.4
+  partner as advanced    : nil made 37%, rescued 45/47, leads rank 8.5
 ```
+
+One further trap, worth recording because it cost a round of confusion. The
+tiebreak in `judgment.ts` breaks a statistical dead heat by keeping the card you
+would least miss, which is right nearly always and exactly backwards on a lead
+with a live nil partner — there the big card is the one to spend. A nil puts
+enough variance on every deal that leads *do* come out tied, so the tiebreak was
+deciding them, and the simulation fix alone left the partner still leading its
+lowest card (average rank 3.8). Teaching `keepValue` about a partner's nil
+brought it to 9.4 and raised the nil through-rate from 23% to 38%.
 
 ### "Always cash your aces"
 

@@ -300,11 +300,15 @@ export function bestPlay(g: GameState, seat: Seat, res: EvalResult): Card {
     })
     .map((c) => c.card);
   if (tied.length < 2) return leader.card;
+  const bids = numericBids(g);
+  const mate = partnerOf(seat);
   return preferAmongEquals(tied, {
     seat,
     hand: g.hands[seat],
-    bids: numericBids(g),
+    bids,
     unseen: buildInfoSet(g, seat).unseen,
+    partnerNilAlive: bids[mate] === 0 && g.tricksWon[mate] === 0,
+    leading: g.trick.length === 0,
   });
 }
 

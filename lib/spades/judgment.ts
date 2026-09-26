@@ -20,6 +20,10 @@ export interface TiebreakContext {
   bids: number[];
   /** Cards neither played nor in `hand` - what the other three seats still hold. */
   unseen: Card[];
+  /** Partner bid nil and has not yet taken a trick. */
+  partnerNilAlive?: boolean;
+  /** True when this play opens the trick. */
+  leading?: boolean;
 }
 
 /** Cards of the same suit, still out, that rank above this one. */
@@ -75,6 +79,15 @@ export function keepValue(card: Card, ctx: TiebreakContext): number {
   // thing most likely to win a trick you cannot afford, so the card you least
   // want to keep is the biggest one you hold.
   if (ctx.bids[ctx.seat] === 0) return -(rank + (suit === 3 ? 13 : 0));
+
+  // Opening a trick while partner is on a live nil turns the ranking over too,
+  // for a different reason. The big card is the one to spend: winning the trick
+  // keeps it away from the one player who must not take it, and gives them a
+  // chance to throw their most dangerous card underneath. Keeping the high card
+  // back and leading the low one leaves the trick alive for exactly the wrong
+  // person - which is what "least miss" means if nobody tells it about the nil.
+  // Trumps still carry a premium, since they are what covers the later tricks.
+  if (ctx.partnerNilAlive && ctx.leading) return -rank + (suit === 3 ? 13 : 0);
 
   let v = rank;
   if (isSureWinner(card, ctx.unseen)) v += SURE_WINNER;
