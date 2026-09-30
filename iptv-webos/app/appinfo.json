@@ -1,0 +1,13 @@
+{
+  "id": "com.homebrew.iptvplayer",
+  "version": "1.0.0",
+  "vendor": "Homebrew",
+  "type": "web",
+  "main": "index.html",
+  "title": "IPTV Player",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#0d1117",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}
