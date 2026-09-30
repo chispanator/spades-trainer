@@ -12,8 +12,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Standalone LG webOS app (plain ES2015, not part of the Next.js build)
-    "iptv-webos/**",
   ]),
 ]);
 
