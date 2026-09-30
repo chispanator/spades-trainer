@@ -68,4 +68,7 @@ The mock server serves the app plus a fake Xtream API seeded with the problem ca
 multi-category, and per-category-only titles). Escape/Backspace act as the remote's Back button, `F` as Red.
 Real streams need a server that sends CORS headers when testing from a browser; a packaged TV app usually isn’t subject to this.
 
+**Interactive mockup:** `node dev/mockup/build.js` writes `dist/mockup.html`, a single page that runs the real app
+with fake data and an on-screen remote.
+
 The code avoids features newer than Chrome 53 (webOS 4.x) — no `async/await`, `?.`, `??` or object spread.

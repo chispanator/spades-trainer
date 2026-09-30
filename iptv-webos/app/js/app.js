@@ -92,7 +92,11 @@
   // ------------------------------------------------------------------ utils
 
   function fitStage() {
-    var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    // On the TV the parent is <body>; in the browser mockup it's the TV frame.
+    var host = $('stage').parentNode;
+    var w = host === document.body ? window.innerWidth : host.clientWidth;
+    var h = host === document.body ? window.innerHeight : host.clientHeight;
+    var s = Math.min(w / 1920, h / 1080);
     $('stage').style.transform = 'scale(' + s + ')';
   }
 
