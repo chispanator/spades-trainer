@@ -167,7 +167,9 @@
       seen[key] = true;
       it._key = key;
       it._name = String(it.name || it.title || 'Untitled');
-      it._search = foldText(it._name);
+      // Punctuation becomes spaces so "The.Odyssey.2026" and "Odyssey, The" both match "odyssey"
+      it._search = ' ' + foldText(it._name + ' ' + (it.o_name || '') + ' ' + (it.title && it.title !== it.name ? it.title : ''))
+        .replace(/[^a-z0-9]+/g, ' ') + ' ';
       items.push(it);
     });
 

@@ -12,8 +12,8 @@
     CH_UP: 33, CH_DOWN: 34, RED: 403, F: 70
   };
 
-  var SECTIONS = ['live', 'vod', 'series', 'info'];
-  var SECTION_LABEL = { live: 'channels', vod: 'movies', series: 'series' };
+  var SECTIONS = ['live', 'vod', 'series', 'search', 'info'];
+  var SECTION_LABEL = { live: 'channels', vod: 'movies', series: 'series', search: 'lists' };
 
   // Card geometry (layout px at 1920x1080)
   var CARD = {
@@ -78,6 +78,8 @@
     gridTop: 0,
     view: [],
     query: '',
+    searchResults: [],
+    langPick: null,
     infoFocus: 0,
     loading: false,
     loadToken: 0,
@@ -86,6 +88,7 @@
     player: null,
     prevScreen: 'browse',
     favs: store.get('favs', { live: {}, vod: {}, series: {} }),
+    prefs: store.get('prefs', { lang: {} }),
     settings: store.get('settings', { liveExt: 'm3u8' })
   };
 
@@ -218,6 +221,9 @@
 
   // ------------------------------------------------------------------ catalog loading
 
+  var CONTENT_SECTIONS = ['vod', 'series', 'live'];
+  var STALE_MS = 6 * 3600 * 1000; // TVs leave apps suspended for days; reload lists after this
+
   function fetchPerCategory(section, cats, onProgress) {
     var api = state.api;
     var queue = cats.slice();
@@ -245,8 +251,55 @@
     });
   }
 
+  // Tag every title with its language(s), quality and a cleaned-up name for search.
+  function annotate(catalog) {
+    catalog.items.forEach(function (it) {
+      it._section = catalog.section;
+      it._langs = {};
+      it._lang = null;
+      it._cats = [];
+      it._quality = Lang.quality(it._name);
+      it._clean = Lang.cleanTitle(it._name);
+    });
+    var counts = {};
+    catalog.categories.forEach(function (c) {
+      if (c.special) return;
+      c.lang = Lang.detectCategory(c.name);
+      var q = Lang.quality(c.name);
+      c.items.forEach(function (it) {
+        it._cats.push(c.name);
+        if (c.lang) {
+          it._langs[c.lang] = true;
+          if (it._lang == null) it._lang = c.lang;
+        }
+        if (!it._quality && q) it._quality = q;
+      });
+    });
+    catalog.items.forEach(function (it) {
+      var t = Lang.detectTitle(it._name);
+      if (t) {
+        it._langs[t] = true;
+        if (it._lang == null) it._lang = t;
+      }
+      if (it._lang == null) it._lang = '';
+      var keys = Object.keys(it._langs);
+      if (!keys.length) keys = [''];
+      keys.forEach(function (k) { counts[k] = (counts[k] || 0) + 1; });
+    });
+    catalog.langCounts = counts;
+  }
+
+  function setCatalog(section, cats, items) {
+    var catalog = Xtream.buildCatalog(section, cats, items);
+    annotate(catalog);
+    catalog.loadedAt = Date.now();
+    state.catalogs[section] = catalog;
+    return catalog;
+  }
+
   function ensureCatalog(section) {
-    if (state.catalogs[section]) return Promise.resolve(state.catalogs[section]);
+    var existing = state.catalogs[section];
+    if (existing && Date.now() - existing.loadedAt < STALE_MS) return Promise.resolve(existing);
     var api = state.api;
     var label = SECTION_LABEL[section];
     var token = showLoading('Loading ' + label + '…');
@@ -264,13 +317,38 @@
     }).then(function (items) {
       if (token !== state.loadToken) throw new Error('cancelled');
       state.raw[section] = { cats: cats, items: items };
-      state.catalogs[section] = Xtream.buildCatalog(section, cats, items);
+      delete state.scans[section];
+      setCatalog(section, cats, items);
       hideLoading();
       return state.catalogs[section];
     }, function (err) {
       if (token === state.loadToken) hideLoading();
       throw err;
     });
+  }
+
+  // Load movies, series and live one after another; a failure in one doesn't stop the others.
+  function ensureAll() {
+    var errors = [];
+    var chain = Promise.resolve();
+    CONTENT_SECTIONS.forEach(function (sec) {
+      chain = chain.then(function () {
+        return ensureCatalog(sec).catch(function (err) {
+          if (err && err.message === 'cancelled') throw err;
+          errors.push(SECTION_LABEL[sec] + ': ' + (err && err.message));
+        });
+      });
+    });
+    return chain.then(function () {
+      if (errors.length) toast('Could not load ' + errors.join('; '), 6000);
+    });
+  }
+
+  function reloadAll() {
+    state.catalogs = {};
+    state.raw = {};
+    state.scans = {};
+    return ensureAll();
   }
 
   function deepScan(section) {
@@ -281,7 +359,7 @@
       return fetchPerCategory(section, raw.cats, function (d, t) {
         if (token === state.loadToken) setLoadingText('Deep scan ' + SECTION_LABEL[section] + ': category ' + d + ' of ' + t + '…');
       }).then(function (res) {
-        if (token !== state.loadToken) return;
+        if (token !== state.loadToken) throw new Error('cancelled');
         hideLoading();
         // Only add titles we don't already have, so the stats still describe the full list.
         var idKey = Xtream.ACTIONS[section].idKey;
@@ -292,14 +370,75 @@
           have[String(it[idKey])] = true;
           return true;
         }));
-        state.catalogs[section] = Xtream.buildCatalog(section, raw.cats, raw.items);
-        var extra = state.catalogs[section].stats.unique - before;
+        var extra = setCatalog(section, raw.cats, raw.items).stats.unique - before;
         state.scans[section] = { categories: res.total, failed: res.failed, extra: extra, at: Date.now() };
-        toast(extra > 0
-          ? 'Deep scan found ' + extra + ' extra ' + SECTION_LABEL[section] + ' — now included.'
-          : 'Deep scan: nothing extra, the full list was already complete.', 5000);
+        return extra;
       });
     });
+  }
+
+  function deepScanAll() {
+    var found = {};
+    return deepScan('vod').then(function (n) {
+      found.vod = n;
+      return deepScan('series');
+    }).then(function (n) {
+      found.series = n;
+      var total = found.vod + found.series;
+      toast(total > 0
+        ? 'Deep scan found ' + found.vod + ' hidden movies and ' + found.series + ' hidden series. They’re included now.'
+        : 'Deep scan finished: the server isn’t hiding anything.', 6000);
+    });
+  }
+
+  // ------------------------------------------------------------------ languages
+
+  function prefLang(section) {
+    var sel = state.prefs.lang[section];
+    var catalog = state.catalogs[section];
+    if (sel) return sel;
+    // Prefer English (unlabeled content usually is too); fall back to everything
+    if (catalog && (catalog.langCounts.en || catalog.langCounts[''])) return 'en';
+    return 'all';
+  }
+
+  function langMatch(it, sel) {
+    if (sel === 'all') return true;
+    if (it._langs[sel]) return true;
+    return sel === 'en' && !Object.keys(it._langs).length;
+  }
+
+  function langLabel(sel) {
+    return sel === 'all' ? 'All languages' : sel === 'en' ? 'English' : Lang.name(sel);
+  }
+
+  function openLangPicker() {
+    var section = state.section;
+    var catalog = state.catalogs[section];
+    var counts = catalog.langCounts;
+    var opts = [
+      { code: 'en', name: 'English + unlabeled', count: (counts.en || 0) + (counts[''] || 0) },
+      { code: 'all', name: 'All languages', count: catalog.items.length }
+    ];
+    Object.keys(counts).filter(function (k) { return k && k !== 'en'; })
+      .sort(function (a, b) { return counts[b] - counts[a]; })
+      .forEach(function (k) { opts.push({ code: k, name: Lang.name(k), count: counts[k] }); });
+    var cur = prefLang(section);
+    var f = 0;
+    opts.forEach(function (o, i) { if (o.code === cur) f = i; });
+    state.langPick = { options: opts, focus: f, top: 0 };
+    state.zone = 'cats';
+    $('content-title').textContent = 'Choose a language';
+    renderCats();
+  }
+
+  function chooseLang(code) {
+    state.prefs.lang[state.section] = code;
+    store.set('prefs', state.prefs);
+    state.langPick = null;
+    buildCatList(true);
+    applyCategory();
+    toast('Showing ' + langLabel(code));
   }
 
   // ------------------------------------------------------------------ browse: tabs & categories
@@ -308,16 +447,16 @@
     if (SECTIONS.indexOf(section) < 0) section = 'live';
     state.section = section;
     state.tabFocus = SECTIONS.indexOf(section);
+    state.langPick = null;
     store.set('lastSection', section);
-    state.query = '';
-    $('search').value = '';
     renderTabs();
 
     var isInfo = section === 'info';
+    var isSearch = section === 'search';
     $('info').classList.toggle('visible', isInfo);
     $('grid').style.display = isInfo ? 'none' : '';
     $('detail').style.display = isInfo ? 'none' : '';
-    $('search').classList.remove('visible');
+    $('search').classList.toggle('visible', isSearch);
 
     if (isInfo) {
       $('cats').innerHTML = '';
@@ -335,12 +474,13 @@
     $('grid').innerHTML = '';
     $('detail').innerHTML = '';
     $('content-title').textContent = '';
-    ensureCatalog(section).then(function () {
+    var load = isSearch ? ensureAll() : ensureCatalog(section);
+    load.then(function () {
       if (state.section !== section) return;
+      if (isSearch) runSearch();
       buildCatList();
-      if (focusContent) state.zone = 'cats';
-      renderTabs();
       applyCategory();
+      if (focusContent) setZone(isSearch ? 'search' : 'cats'); else renderTabs();
     }, function (err) {
       state.zone = 'tabs';
       renderTabs();
@@ -358,26 +498,74 @@
     }
   }
 
-  function buildCatList() {
+  var LANG_RANK = function (c) { return c.lang === 'en' ? 0 : !c.lang ? 1 : 2; };
+
+  function buildCatList(resetFocus) {
     var section = state.section;
-    var catalog = state.catalogs[section];
-    var favCount = catalog.items.filter(function (it) { return state.favs[section][it._key]; }).length;
-    var list = [{ id: '__search', name: 'Search', count: '' }];
-    if (favCount) list.push({ id: '__fav', name: '★ Favorites', count: favCount });
-    catalog.categories.forEach(function (c) {
-      list.push({ id: c.id, name: c.name, count: c.items.length, cat: c });
-    });
+    var prevId = state.catList.length ? (currentCat() || {}).id : null;
+    var list;
+
+    if (section === 'search') {
+      var res = state.searchResults;
+      var count = function (sec) { return res.filter(function (it) { return it._section === sec; }).length; };
+      list = [
+        { id: '__res_all', name: 'All results', count: res.length, items: res },
+        { id: '__res_vod', name: 'Movies', count: count('vod'), sec: 'vod' },
+        { id: '__res_series', name: 'Series', count: count('series'), sec: 'series' },
+        { id: '__res_live', name: 'Live TV', count: count('live'), sec: 'live' },
+        { id: '__reload', name: '↻ Reload all lists', count: '', action: true },
+        { id: '__deep', name: 'Deep scan for hidden titles', count: '', action: true }
+      ];
+      list.forEach(function (c) {
+        if (c.sec) c.items = res.filter(function (it) { return it._section === c.sec; });
+      });
+    } else {
+      var catalog = state.catalogs[section];
+      var sel = prefLang(section);
+      var filterItems = function (items) { return items.filter(function (it) { return langMatch(it, sel); }); };
+      list = [{ id: '__lang', name: 'Language: ' + langLabel(sel), count: '▸', action: true }];
+      var favs = catalog.items.filter(function (it) { return state.favs[section][it._key]; });
+      if (favs.length) list.push({ id: '__fav', name: '★ Favorites', count: favs.length, items: favs });
+      var cats = [];
+      var tail = [];
+      catalog.categories.forEach(function (c) {
+        var items;
+        if (c.special) items = filterItems(c.items);            // All / Uncategorized
+        else if (sel === 'all') items = c.items;
+        else if (c.lang) items = c.lang === sel ? c.items : [];  // labeled: whole category or nothing
+        else items = filterItems(c.items);                        // unlabeled: filter its titles
+        if (!items.length) return;
+        var entry = { id: c.id, name: c.name, count: items.length, items: items, lang: c.lang };
+        if (c.id === '__all') list.push(entry);
+        else if (c.id === '__none') tail.push(entry);
+        else cats.push(entry);
+      });
+      if (sel === 'all') {
+        // English first, then unlabeled, then other languages grouped together
+        cats = cats.map(function (c, i) { return { c: c, i: i }; }).sort(function (a, b) {
+          var ra = LANG_RANK(a.c);
+          var rb = LANG_RANK(b.c);
+          if (ra !== rb) return ra - rb;
+          if (ra === 2 && a.c.lang !== b.c.lang) return Lang.name(a.c.lang) < Lang.name(b.c.lang) ? -1 : 1;
+          return a.i - b.i;
+        }).map(function (x) { return x.c; });
+      }
+      list = list.concat(cats, tail);
+    }
+
     state.catList = list;
-    // Default to "All" rather than Search on first open
-    var f = state.catFocus[section];
-    // The query is cleared on section change, so reopening on an empty Search is pointless
-    if (f == null || f >= list.length || (list[f].id === '__search' && !state.query.trim())) f = indexOfCat('__all');
+    var f = resetFocus ? -1 : indexOfCat(prevId);
+    if (f < 0) f = state.catFocus[section];
+    if (resetFocus || f == null || f >= list.length || list[f].action) {
+      f = indexOfCat(section === 'search' ? '__res_all' : '__all');
+      if (f < 0) f = Math.min(1, list.length - 1);
+    }
     state.catFocus[section] = f;
   }
 
   function indexOfCat(id) {
     for (var i = 0; i < state.catList.length; i++) if (state.catList[i].id === id) return i;
-    return 0;
+    return -1;
   }
 
   function currentCat() {
@@ -386,58 +574,134 @@
 
   function renderCats() {
     var el = $('cats');
-    var list = state.catList;
     var visible = Math.floor((el.clientHeight - 40) / CAT_ROW_H) || 12;
+    var html = '';
+    var i;
+    if (state.langPick) {
+      var lp = state.langPick;
+      if (lp.focus < lp.top) lp.top = lp.focus;
+      if (lp.focus >= lp.top + visible) lp.top = lp.focus - visible + 1;
+      for (i = lp.top; i < Math.min(lp.options.length, lp.top + visible); i++) {
+        var o = lp.options[i];
+        html += '<div class="cat' + (i === lp.focus ? ' current focused' : '') + '" data-lang="' + i + '"><span class="name">' +
+          esc(o.name) + '</span><span class="count">' + o.count + '</span></div>';
+      }
+      el.innerHTML = html;
+      return;
+    }
+    var list = state.catList;
     var f = state.catFocus[state.section];
     if (f < state.catTop) state.catTop = f;
     if (f >= state.catTop + visible) state.catTop = f - visible + 1;
     if (state.catTop > Math.max(0, list.length - visible)) state.catTop = Math.max(0, list.length - visible);
-    var html = '';
-    for (var i = state.catTop; i < Math.min(list.length, state.catTop + visible); i++) {
+    for (i = state.catTop; i < Math.min(list.length, state.catTop + visible); i++) {
       var c = list[i];
-      var cls = 'cat' + (i === f ? ' current' : '') + (i === f && state.zone === 'cats' ? ' focused' : '');
+      var cls = 'cat' + (c.action ? ' action' : '') + (i === f ? ' current' : '') + (i === f && state.zone === 'cats' ? ' focused' : '');
       html += '<div class="' + cls + '" data-cat="' + i + '"><span class="name">' + esc(c.name) +
         '</span><span class="count">' + esc(c.count) + '</span></div>';
     }
     el.innerHTML = html;
   }
 
-  function itemsForCat(cat) {
-    var section = state.section;
-    var catalog = state.catalogs[section];
-    if (cat.id === '__search') {
-      var q = Xtream.foldText(state.query.trim());
-      if (!q) return [];
-      var words = q.split(/\s+/);
-      return catalog.items.filter(function (it) {
-        for (var i = 0; i < words.length; i++) if (it._search.indexOf(words[i]) < 0) return false;
-        return true;
-      });
-    }
-    if (cat.id === '__fav') {
-      return catalog.items.filter(function (it) { return state.favs[section][it._key]; });
-    }
-    return cat.cat.items;
-  }
-
   function applyCategory() {
     var cat = currentCat();
-    state.view = itemsForCat(cat);
+    if (!cat) return;
+    if (cat.action) {
+      // Action rows (language, reload, deep scan) run on OK; keep showing the current grid
+      renderCats();
+      return;
+    }
+    state.view = cat.items || [];
     state.gridFocus = 0;
     state.gridTop = 0;
-    var isSearch = cat.id === '__search';
-    $('search').classList.toggle('visible', isSearch);
-    var title = cat.name;
-    if (isSearch) {
-      title = state.query.trim() ? 'Search · ' + state.view.length + ' results' : 'Search ' +
-        state.catalogs[state.section].items.length + ' ' + SECTION_LABEL[state.section];
+    var title;
+    if (state.section === 'search') {
+      var q = state.query.trim();
+      title = q ? cat.name + ' for “' + q + '” · ' + state.view.length : 'Search movies, series and live TV';
     } else {
-      title += ' · ' + state.view.length + ' ' + SECTION_LABEL[state.section];
+      title = cat.name + ' · ' + state.view.length + ' ' + SECTION_LABEL[state.section] +
+        (cat.id === '__all' || cat.id === '__none' ? ' · ' + langLabel(prefLang(state.section)) : '');
     }
     $('content-title').textContent = title;
     renderCats();
     renderGrid();
     updateDetail();
+  }
+
+  function runCatAction(cat) {
+    if (cat.id === '__lang') openLangPicker();
+    else if (cat.id === '__reload') {
+      reloadAll().then(afterSearchDataChange, ignoreCancel);
+    } else if (cat.id === '__deep') {
+      deepScanAll().then(afterSearchDataChange, function (err) {
+        if (err && err.message === 'cancelled') return;
+        toast('Deep scan failed: ' + (err && err.message), 5000);
+      });
+    }
+  }
+
+  function ignoreCancel(err) {
+    if (!err || err.message !== 'cancelled') toast('Failed: ' + (err && err.message), 5000);
+  }
+
+  function afterSearchDataChange() {
+    if (state.section !== 'search') return;
+    runSearch();
+    buildCatList();
+    state.catFocus.search = indexOfCat('__res_all');
+    applyCategory();
+    setZone(state.view.length ? 'grid' : 'cats');
+  }
+
+  // ------------------------------------------------------------------ search (all sections)
+
+  var STOPWORDS = { the: 1, a: 1, an: 1, of: 1, and: 1, la: 1, le: 1, el: 1 };
+  var QUALITY_RANK = { '4K': 0, FHD: 1, HD: 2, '': 3, SD: 4, CAM: 5 };
+  var SECTION_RANK = { vod: 0, series: 1, live: 2 };
+
+  function searchWords(text) {
+    var words = Xtream.foldText(text).replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+    var strong = words.filter(function (w) { return !STOPWORDS[w]; });
+    return strong.length ? strong : words;
+  }
+
+  function runSearch() {
+    var q = state.query.trim();
+    if (!q) { state.searchResults = []; return; }
+    var words = searchWords(q);
+    var qClean = Lang.cleanTitle(q);
+    var qNoArticle = qClean.replace(/^(the|a|an) /, '');
+    var results = [];
+    CONTENT_SECTIONS.forEach(function (sec) {
+      var catalog = state.catalogs[sec];
+      if (!catalog) return;
+      catalog.items.forEach(function (it) {
+        for (var i = 0; i < words.length; i++) if (it._search.indexOf(words[i]) < 0) return;
+        var clean = it._clean.replace(/^(the|a|an) /, '');
+        it._score = clean === qNoArticle ? 0 : clean.indexOf(qNoArticle) === 0 ? 1 : 2;
+        results.push(it);
+      });
+    });
+    var sel = prefLang('vod');
+    results.sort(function (a, b) {
+      if (a._score !== b._score) return a._score - b._score;
+      var la = langMatch(a, sel) ? 0 : 1;
+      var lb = langMatch(b, sel) ? 0 : 1;
+      if (la !== lb) return la - lb;
+      if (a._section !== b._section) return SECTION_RANK[a._section] - SECTION_RANK[b._section];
+      var qa = QUALITY_RANK[a._quality] || 0;
+      var qb = QUALITY_RANK[b._quality] || 0;
+      if (qa !== qb) return qa - qb;
+      return Number(b.added || 0) - Number(a.added || 0);
+    });
+    state.searchResults = results;
+  }
+
+  function searchedCounts() {
+    return CONTENT_SECTIONS.map(function (sec) {
+      var c = state.catalogs[sec];
+      return (c ? c.items.length : 0) + ' ' + SECTION_LABEL[sec];
+    }).join(', ');
   }
 
   // ------------------------------------------------------------------ browse: grid
@@ -450,14 +714,27 @@
     return { w: g.w, h: g.h, gap: g.gap, cols: cols, rows: rows };
   }
 
+  function badges(it) {
+    var b = '';
+    if (state.section === 'search' && it._section !== 'vod') b += '<span class="badge kind">' + (it._section === 'live' ? 'LIVE' : 'SERIES') + '</span>';
+    // In a section the English view is the norm, so only flag other languages there
+    if (it._lang && (state.section === 'search' || it._lang !== 'en')) b += '<span class="badge">' + esc(it._lang.toUpperCase()) + '</span>';
+    if (it._quality) b += '<span class="badge' + (it._quality === 'CAM' ? ' cam' : '') + '">' + esc(it._quality) + '</span>';
+    return b ? '<div class="badges">' + b + '</div>' : '';
+  }
+
   function renderGrid() {
     var el = $('grid');
     var view = state.view;
     if (!view.length) {
-      var cat = currentCat();
-      var msg = cat && cat.id === '__search'
-        ? (state.query.trim() ? 'No matches for “' + esc(state.query) + '”.' : 'Press OK on the search box above and type a title.')
-        : 'Nothing here.';
+      var msg = 'Nothing here.';
+      if (state.section === 'search') {
+        var q = state.query.trim();
+        msg = q
+          ? 'No matches for “' + esc(q) + '” in ' + searchedCounts() + '.<br><br>' +
+            'Try one distinctive word (e.g. “odyssey”), or pick <b>Reload all lists</b> or <b>Deep scan for hidden titles</b> on the left.'
+          : 'Type a title in the box above. Searches ' + searchedCounts() + ' in every language.';
+      }
       el.innerHTML = '<div class="empty">' + msg + '</div>';
       return;
     }
@@ -473,12 +750,13 @@
       var focused = state.zone === 'grid' && i === state.gridFocus;
       var img = itemImage(it);
       var initial = esc(it._name.replace(/^[^A-Za-z0-9]+/, '').charAt(0).toUpperCase() || '?');
-      html += '<div class="card ' + state.section + (focused ? ' focused' : '') + '" data-idx="' + i + '" style="left:' +
+      html += '<div class="card ' + it._section + (focused ? ' focused' : '') + '" data-idx="' + i + '" style="left:' +
         (c * (geo.w + geo.gap)) + 'px;top:' + (r * (geo.h + geo.gap)) + 'px;width:' + geo.w + 'px;height:' + geo.h + 'px">' +
         '<div class="ph" style="height:' + imgH + 'px">' + initial + '</div>' +
         (img ? '<img src="' + esc(img) + '" style="height:' + imgH + 'px" onerror="this.parentNode.removeChild(this)">' : '') +
-        '<div class="label">' + (state.section === 'live' && it.num ? esc(it.num) + ' · ' : '') + esc(it._name) + '</div>' +
-        (state.favs[state.section][it._key] ? '<div class="fav">★</div>' : '') +
+        badges(it) +
+        '<div class="label">' + (it._section === 'live' && it.num ? esc(it.num) + ' · ' : '') + esc(it._name) + '</div>' +
+        (state.favs[it._section][it._key] ? '<div class="fav">★</div>' : '') +
         '</div>';
     }
     el.innerHTML = html;
@@ -505,15 +783,16 @@
     clearTimeout(epgTimer);
     if (!it) { el.innerHTML = ''; return; }
     var parts = [];
+    if (state.section === 'search') parts.push({ vod: 'Movie', series: 'Series', live: 'Live channel' }[it._section]);
+    if (it._lang) parts.push(esc(Lang.name(it._lang)));
+    if (it._quality) parts.push(esc(it._quality));
     if (it.rating && it.rating !== '0') parts.push('★ ' + esc(it.rating));
-    if (it.genre) parts.push(esc(it.genre));
-    if (it.releaseDate || it.release_date) parts.push(esc(it.releaseDate || it.release_date));
     if (it.added) parts.push('Added ' + new Date(Number(it.added) * 1000).toLocaleDateString());
+    if (it._cats.length) parts.push('In ' + esc(it._cats.slice(0, 2).join(', ')) + (it._cats.length > 2 ? ' +' + (it._cats.length - 2) : ''));
     parts.push((state.gridFocus + 1) + ' of ' + state.view.length);
-    var hint = 'Red button / F: favorite';
-    el.innerHTML = '<b>' + esc(it._name) + '</b><br>' + parts.join(' · ') + ' · <span class="muted">' + hint + '</span>';
+    el.innerHTML = '<b>' + esc(it._name) + '</b><br>' + parts.join(' · ') + ' · <span class="muted">Red / F: favorite</span>';
 
-    if (state.section === 'live') {
+    if (it._section === 'live') {
       var token = ++epgToken;
       epgTimer = setTimeout(function () {
         state.api.shortEpg(it.stream_id, 2).then(function (list) {
@@ -535,18 +814,17 @@
   function toggleFavorite() {
     var it = state.view[state.gridFocus];
     if (!it) return;
-    var favs = state.favs[state.section];
+    var favs = state.favs[it._section];
     if (favs[it._key]) delete favs[it._key]; else favs[it._key] = true;
     store.set('favs', state.favs);
     toast(favs[it._key] ? 'Added to favorites' : 'Removed from favorites');
-    var catId = currentCat().id;
+    if (state.section === 'search') { renderGrid(); return; }
+    var wasFav = currentCat().id === '__fav';
+    var f = state.gridFocus;
     buildCatList();
-    state.catFocus[state.section] = indexOfCat(catId);
-    if (catId === '__fav') {
-      var f = state.gridFocus;
+    if (wasFav) {
       applyCategory();
-      if (state.view.length) scrollGridTo(Math.min(f, state.view.length - 1)); else state.zone = 'cats';
-      renderCats();
+      if (state.view.length) scrollGridTo(Math.min(f, state.view.length - 1)); else setZone('cats');
     } else {
       renderCats();
       renderGrid();
@@ -556,16 +834,21 @@
   function openItem(idx) {
     var it = state.view[idx];
     if (!it) return;
-    if (state.section === 'live') playLive(state.view, idx);
-    else if (state.section === 'vod') playVod({ kind: 'vod', title: it._name, url: state.api.movieUrl(it), resumeKey: 'm' + it._key });
-    else if (state.section === 'series') openSeries(it);
+    if (it._section === 'live') {
+      var lives = state.view.filter(function (x) { return x._section === 'live'; });
+      playLive(lives, lives.indexOf(it));
+    } else if (it._section === 'vod') {
+      playVod({ kind: 'vod', title: it._name, url: state.api.movieUrl(it), resumeKey: 'm' + it._key });
+    } else if (it._section === 'series') {
+      openSeries(it);
+    }
   }
 
   // ------------------------------------------------------------------ browse: info / diagnostics
 
   var INFO_ACTIONS = [
-    { id: 'scan-vod', label: 'Deep scan Movies' },
-    { id: 'scan-series', label: 'Deep scan Series' },
+    { id: 'reload', label: 'Reload all lists' },
+    { id: 'scan', label: 'Deep scan Movies + Series' },
     { id: 'scan-live', label: 'Deep scan Live' },
     { id: 'format', label: 'Live format' },
     { id: 'logout', label: 'Log out' }
@@ -590,9 +873,7 @@
     var metrics = [
       ['unique', 'Unique titles'],
       ['returned', 'Rows returned'],
-      ['duplicates', 'Duplicate rows'],
       ['categories', 'Categories'],
-      ['emptyCategories', 'Empty categories'],
       ['uncategorized', 'Uncategorized titles'],
       ['multiCategory', 'In 2+ categories']
     ];
@@ -604,10 +885,25 @@
       });
       html += '</tr>';
     });
-    html += '<tr><td>Deep scan</td>';
+    html += '<tr><td>English + unlabeled</td>';
+    ['live', 'vod', 'series'].forEach(function (sec) {
+      var c = state.catalogs[sec];
+      html += '<td>' + (c ? (c.langCounts.en || 0) + (c.langCounts[''] || 0) : '—') + '</td>';
+    });
+    html += '</tr><tr><td>Languages found</td>';
+    ['live', 'vod', 'series'].forEach(function (sec) {
+      var c = state.catalogs[sec];
+      html += '<td>' + (c ? Object.keys(c.langCounts).filter(Boolean).length : '—') + '</td>';
+    });
+    html += '</tr><tr><td>Deep scan</td>';
     ['live', 'vod', 'series'].forEach(function (sec) {
       var sc = state.scans[sec];
       html += '<td>' + (sc ? (sc.extra > 0 ? '+' + sc.extra + ' found' : 'complete') + (sc.failed ? ', ' + sc.failed + ' failed' : '') : '—') + '</td>';
+    });
+    html += '</tr><tr><td>Lists loaded</td>';
+    ['live', 'vod', 'series'].forEach(function (sec) {
+      var c = state.catalogs[sec];
+      html += '<td>' + (c ? fmtClock(c.loadedAt) : '—') + '</td>';
     });
     html += '</tr></table></div></div>';
 
@@ -617,21 +913,25 @@
       html += '<div class="action' + (state.zone === 'info' && i === state.infoFocus ? ' focused' : '') + '" data-action="' + i + '">' + label + '</div>';
     });
     html += '</div>';
-    html += '<p class="note">“—” means that tab hasn’t been opened yet. Uncategorized titles are ones whose category the server ' +
-      'doesn’t list — many players hide them; here they get their own “Uncategorized” group. Deep scan asks for every category ' +
-      'one by one and adds anything missing from the full list.</p>';
+    html += '<p class="note">“—” means that list hasn’t been loaded yet. Uncategorized titles are ones whose category the server ' +
+      'doesn’t list; many players hide them. Deep scan asks for every category one by one and adds anything missing from the ' +
+      'full list. Lists reload automatically when they’re more than 6 hours old.</p>';
     $('info').innerHTML = html;
   }
 
   function runInfoAction(i) {
     var a = INFO_ACTIONS[i];
     if (!a) return;
-    if (a.id.indexOf('scan-') === 0) {
-      deepScan(a.id.slice(5)).then(renderInfo, function (err) {
-        if (err && err.message === 'cancelled') return;
-        toast('Scan failed: ' + (err && err.message), 5000);
-        renderInfo();
-      });
+    var done = function () { renderInfo(); };
+    if (a.id === 'reload') {
+      reloadAll().then(function () { toast('All lists reloaded'); done(); }, function (err) { ignoreCancel(err); done(); });
+    } else if (a.id === 'scan') {
+      deepScanAll().then(done, function (err) { ignoreCancel(err); done(); });
+    } else if (a.id === 'scan-live') {
+      deepScan('live').then(function (n) {
+        toast(n > 0 ? 'Deep scan found ' + n + ' hidden channels.' : 'Deep scan finished: no hidden channels.', 5000);
+        done();
+      }, function (err) { ignoreCancel(err); done(); });
     } else if (a.id === 'format') {
       state.settings.liveExt = state.settings.liveExt === 'm3u8' ? 'ts' : 'm3u8';
       store.set('settings', state.settings);
@@ -661,14 +961,20 @@
     }
     renderTabs();
     if (state.section === 'info') { renderInfo(); return; }
-    if (state.catList.length && state.catalogs[state.section]) {
+    if (state.catList.length) {
       renderCats();
       renderGrid();
     }
   }
 
+  function moveCat(f) {
+    state.catFocus[state.section] = Math.max(0, Math.min(state.catList.length - 1, f));
+    applyCategory();
+  }
+
   function browseKey(code) {
     var z = state.zone;
+    var isSearch = state.section === 'search';
     var geo;
 
     if (z === 'tabs') {
@@ -676,35 +982,47 @@
       else if (code === KEY.RIGHT && state.tabFocus < SECTIONS.length - 1) { state.tabFocus++; renderTabs(); }
       else if (code === KEY.ENTER || code === KEY.DOWN) {
         var sec = SECTIONS[state.tabFocus];
-        if (sec !== state.section || !state.catalogs[sec]) selectSection(sec, true);
-        else setZone(sec === 'info' ? 'info' : 'cats');
+        var stale = state.catalogs[sec] && Date.now() - state.catalogs[sec].loadedAt > STALE_MS;
+        if (sec !== state.section || (sec !== 'info' && !state.catList.length) || stale) selectSection(sec, true);
+        else setZone(sec === 'info' ? 'info' : sec === 'search' ? 'search' : 'cats');
       } else if (code === KEY.BACK) { exitApp(); }
       else return false;
+      return true;
+    }
+
+    if (z === 'cats' && state.langPick) {
+      var lp = state.langPick;
+      if (code === KEY.UP && lp.focus > 0) lp.focus--;
+      else if (code === KEY.DOWN && lp.focus < lp.options.length - 1) lp.focus++;
+      else if (code === KEY.ENTER || code === KEY.RIGHT) { chooseLang(lp.options[lp.focus].code); return true; }
+      else if (code === KEY.BACK || code === KEY.LEFT) { state.langPick = null; applyCategory(); return true; }
+      else if (code !== KEY.UP && code !== KEY.DOWN) return false;
+      renderCats();
       return true;
     }
 
     if (z === 'cats') {
       var f = state.catFocus[state.section];
       if (code === KEY.UP) {
-        if (f > 0) { state.catFocus[state.section] = f - 1; state.query = ''; $('search').value = ''; applyCategory(); }
-        else setZone('tabs');
+        if (f > 0) moveCat(f - 1);
+        else setZone(isSearch ? 'search' : 'tabs');
       } else if (code === KEY.DOWN) {
-        if (f < state.catList.length - 1) { state.catFocus[state.section] = f + 1; state.query = ''; $('search').value = ''; applyCategory(); }
+        if (f < state.catList.length - 1) moveCat(f + 1);
       } else if (code === KEY.CH_UP || code === KEY.CH_DOWN) {
-        var jump = code === KEY.CH_DOWN ? 10 : -10;
-        state.catFocus[state.section] = Math.max(0, Math.min(state.catList.length - 1, f + jump));
-        applyCategory();
+        moveCat(f + (code === KEY.CH_DOWN ? 10 : -10));
       } else if (code === KEY.RIGHT || code === KEY.ENTER) {
-        if (currentCat().id === '__search') setZone('search');
+        var cat = currentCat();
+        if (cat.action) runCatAction(cat);
         else if (state.view.length) setZone('grid');
-      } else if (code === KEY.BACK) { setZone('tabs'); }
+        else if (isSearch) setZone('search');
+      } else if (code === KEY.BACK) { setZone(isSearch ? 'search' : 'tabs'); }
       else return false;
       return true;
     }
 
     if (z === 'search') {
       if (code === KEY.UP) setZone('tabs');
-      else if ((code === KEY.DOWN || code === KEY.ENTER) && state.view.length) setZone('grid');
+      else if (code === KEY.DOWN || code === KEY.ENTER) setZone(state.view.length ? 'grid' : 'cats');
       else if (code === KEY.BACK || code === KEY.ESC) setZone('cats');
       else return false; // let the input handle typing / caret keys
       return true;
@@ -720,7 +1038,7 @@
         if ((g + 1) % geo.cols !== 0 && g + 1 < n) scrollGridTo(g + 1);
       } else if (code === KEY.UP) {
         if (g - geo.cols >= 0) scrollGridTo(g - geo.cols);
-        else setZone(currentCat().id === '__search' ? 'search' : 'tabs');
+        else setZone(isSearch ? 'search' : 'tabs');
       } else if (code === KEY.DOWN) {
         if (g + geo.cols < n) scrollGridTo(g + geo.cols);
         else if (Math.floor(g / geo.cols) < Math.floor((n - 1) / geo.cols)) scrollGridTo(n - 1);
@@ -1104,12 +1422,14 @@
       if ((t = closest(e.target, 'data-section'))) {
         state.tabFocus = SECTIONS.indexOf(t.getAttribute('data-section'));
         selectSection(t.getAttribute('data-section'), true);
+      } else if ((t = closest(e.target, 'data-lang'))) {
+        if (state.langPick) chooseLang(state.langPick.options[Number(t.getAttribute('data-lang'))].code);
       } else if ((t = closest(e.target, 'data-cat'))) {
         state.catFocus[state.section] = Number(t.getAttribute('data-cat'));
-       
-        state.zone = currentCat().id === '__search' ? 'search' : 'cats';
+        state.zone = 'cats';
         applyCategory();
-        setZone(state.zone);
+        setZone('cats');
+        if (currentCat().action) runCatAction(currentCat());
       } else if ((t = closest(e.target, 'data-idx'))) {
         state.gridFocus = Number(t.getAttribute('data-idx'));
         setZone('grid');
@@ -1148,13 +1468,11 @@
       scrollGridTo(state.gridFocus + dir * geo.cols);
       renderTabs();
       renderCats();
-    } else if ($('cats').contains(e.target)) {
+    } else if ($('cats').contains(e.target) && !state.langPick) {
       var f = state.catFocus[state.section] + dir;
       if (f >= 0 && f < state.catList.length) {
-        state.catFocus[state.section] = f;
-       
         state.zone = 'cats';
-        applyCategory();
+        moveCat(f);
       }
     }
   }
@@ -1164,9 +1482,11 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(function () {
       state.query = $('search').value;
-      var zone = state.zone;
+      if (state.section !== 'search') return;
+      runSearch();
+      buildCatList();
+      state.catFocus.search = indexOfCat('__res_all');
       applyCategory();
-      state.zone = zone;
     }, 300);
   }
 

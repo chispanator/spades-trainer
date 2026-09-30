@@ -14,7 +14,7 @@ if (!stage) throw new Error('could not find #stage in app/index.html');
 const css = read('app/style.css').replace('html, body {', '.tv {').replace('* { box-sizing: border-box; }', '.tv * { box-sizing: border-box; }');
 if (!css.includes('.tv {')) throw new Error('style.css layout changed; update build.js');
 
-const scripts = ['dev/mockup/mock-browser.js', 'app/js/xtream.js', 'app/js/app.js'].map((p) => {
+const scripts = ['dev/mockup/mock-browser.js', 'app/js/lang.js', 'app/js/xtream.js', 'app/js/app.js'].map((p) => {
   const src = read(p);
   if (/<\/script/i.test(src)) throw new Error(p + ' contains </script');
   return '<script>\n' + src + '\n</script>';

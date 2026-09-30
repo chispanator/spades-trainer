@@ -7,7 +7,12 @@ Features:
 
 - **Live TV** with channel logos, now/next guide info, and ▲▼ / CH± zapping in the player
 - **Movies** and **Series** (seasons → episodes) with resume-where-you-left-off and auto-play of the next episode
-- **Search** within each section (accent-insensitive), **favorites** (Red button)
+- **Languages**: sections are filtered by language, English first. The language is read from category labels
+  like `EN |`, `|FR|`, `[DE]`, `4K-EN` or `HINDI MOVIES`. Pick another language (or all) from the top of the category list
+- **Search** across movies, series and live at once, in every language. It ignores punctuation, labels and word
+  order ("The.Odyssey.2026.HDCAM", "Odyssey, The", "EN - The Odyssey (2026)" all match), and badges show language and
+  quality (4K / FHD / CAM) so duplicate listings are easy to tell apart
+- **Favorites** (Red button)
 - **Info** tab: account status/expiry and diagnostics showing exactly what the server returned
 - Works with the remote's D-pad, the Magic Remote pointer, and a keyboard
 
@@ -20,6 +25,9 @@ Features:
 | Server omits some titles from the full list but returns them per-category | **Info → Deep scan** requests each category individually and merges anything extra |
 | Full list is too big and times out | Falls back automatically to per-category loading |
 | Player hides "adult"/hidden categories or empty ones | Nothing is filtered |
+| Player's search only matches the start of the name, so "EN - The Odyssey" or "The.Odyssey.2026" is missed | Word search anywhere in the title, punctuation ignored |
+| Player searches one section/category at a time | Search covers movies, series and live together |
+| Player cached an old list and never refreshed | Lists reload after 6 hours, or on demand (**Reload all lists**) |
 
 Compare the **Unique titles** count on the Info tab with what your other player shows.
 
