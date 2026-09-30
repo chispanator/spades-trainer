@@ -5,6 +5,8 @@ and password on the TV (they're stored only in the TV's local storage — never 
 
 Features:
 
+- **Home** screen with **Continue watching** (resume movies and episodes, with "Up next" for the following
+  episode) and **Recent channels**. Red removes a card
 - **Live TV** with channel logos, now/next guide info, and ▲▼ / CH± zapping in the player
 - **Movies** and **Series** (seasons → episodes) with resume-where-you-left-off and auto-play of the next episode
 - **Languages**: sections are filtered by language, English first. The language is read from category labels
@@ -12,6 +14,9 @@ Features:
 - **Search** across movies, series and live at once, in every language. It ignores punctuation, labels and word
   order ("The.Odyssey.2026.HDCAM", "Odyssey, The", "EN - The Odyssey (2026)" all match), and badges show language and
   quality (4K / FHD / CAM) so duplicate listings are easy to tell apart
+- **Live events**: search "notre dame football" and it finds the channel airing the game from the TV guide
+  (XMLTV, streamed and filtered to the next 24 hours), plus event channels named after the game. Sport words
+  match provider shorthand (football → NCAAF / CFB / NFL, basketball → NCAAB / NBA, fight → UFC / PPV, …)
 - **Favorites** (Red button)
 - **Info** tab: account status/expiry and diagnostics showing exactly what the server returned
 - Works with the remote's D-pad, the Magic Remote pointer, and a keyboard

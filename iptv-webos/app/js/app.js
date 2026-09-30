@@ -12,7 +12,7 @@
     CH_UP: 33, CH_DOWN: 34, RED: 403, F: 70
   };
 
-  var SECTIONS = ['live', 'vod', 'series', 'search', 'info'];
+  var SECTIONS = ['home', 'live', 'vod', 'series', 'search', 'info'];
   var SECTION_LABEL = { live: 'channels', vod: 'movies', series: 'series', search: 'lists' };
 
   // Card geometry (layout px at 1920x1080)
@@ -36,6 +36,15 @@
   function fmtClock(ms) {
     var d = new Date(ms);
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  // "7:30 PM" today, "Tue 7:30 PM" otherwise (guide times)
+  function fmtWhen(ms) {
+    var d = new Date(ms);
+    var h = d.getHours();
+    var t = (h % 12 || 12) + ':' + pad2(d.getMinutes()) + (h < 12 ? ' AM' : ' PM');
+    if (d.toDateString() === new Date().toDateString()) return t;
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] + ' ' + t;
   }
 
   function fmtDuration(sec) {
@@ -79,6 +88,8 @@
     view: [],
     query: '',
     searchResults: [],
+    guide: { status: 'idle', list: [], channels: {} },
+    home: { row: 0, cols: [] },
     langPick: null,
     infoFocus: 0,
     loading: false,
@@ -179,7 +190,7 @@
       state.raw = {};
       state.scans = {};
       showScreen('browse');
-      selectSection(store.get('lastSection', 'live'), true);
+      selectSection('home', true);
     }, function (err) {
       if (token !== state.loadToken) return;
       hideLoading();
@@ -453,6 +464,16 @@
 
     var isInfo = section === 'info';
     var isSearch = section === 'search';
+    var isHome = section === 'home';
+    $('browse-body').classList.toggle('home-mode', isHome);
+    if (isHome) {
+      state.home.row = 0;
+      state.home.cols = [];
+      state.zone = focusContent && homeRows().length ? 'home' : 'tabs';
+      renderTabs();
+      renderHome();
+      return;
+    }
     $('info').classList.toggle('visible', isInfo);
     $('grid').style.display = isInfo ? 'none' : '';
     $('detail').style.display = isInfo ? 'none' : '';
@@ -477,7 +498,7 @@
     var load = isSearch ? ensureAll() : ensureCatalog(section);
     load.then(function () {
       if (state.section !== section) return;
-      if (isSearch) runSearch();
+      if (isSearch) { runSearch(); loadGuide(); }
       buildCatList();
       applyCategory();
       if (focusContent) setZone(isSearch ? 'search' : 'cats'); else renderTabs();
@@ -513,6 +534,8 @@
         { id: '__res_vod', name: 'Movies', count: count('vod'), sec: 'vod' },
         { id: '__res_series', name: 'Series', count: count('series'), sec: 'series' },
         { id: '__res_live', name: 'Live TV', count: count('live'), sec: 'live' },
+        { id: '__res_epg', name: 'On TV now & later', count: res.filter(function (it) { return it._epg; }).length,
+          items: res.filter(function (it) { return it._epg; }) },
         { id: '__reload', name: '↻ Reload all lists', count: '', action: true },
         { id: '__deep', name: 'Deep scan for hidden titles', count: '', action: true }
       ];
@@ -617,7 +640,7 @@
     var title;
     if (state.section === 'search') {
       var q = state.query.trim();
-      title = q ? cat.name + ' for “' + q + '” · ' + state.view.length : 'Search movies, series and live TV';
+      title = q ? cat.name + ' for “' + q + '” · ' + state.view.length : 'Search movies, series, live TV and the TV guide';
     } else {
       title = cat.name + ' · ' + state.view.length + ' ' + SECTION_LABEL[state.section] +
         (cat.id === '__all' || cat.id === '__none' ? ' · ' + langLabel(prefLang(state.section)) : '');
@@ -656,8 +679,25 @@
   // ------------------------------------------------------------------ search (all sections)
 
   var STOPWORDS = { the: 1, a: 1, an: 1, of: 1, and: 1, la: 1, le: 1, el: 1 };
+  // Words that describe *how* something airs rather than *what* it is; nice to match, not required
+  var SOFT_WORDS = { game: 1, games: 1, match: 1, live: 1, vs: 1, v: 1, versus: 1, at: 1, tonight: 1, today: 1,
+    stream: 1, channel: 1, tv: 1, watch: 1, event: 1, events: 1, sports: 1, sport: 1 };
+  // Sport words and the shorthand providers put in channel names and guide titles
+  var SPORT_SYNONYMS = {
+    football: ['football', 'ncaaf', 'cfb', 'nfl', 'gridiron'],
+    college: ['college', 'ncaa', 'ncaaf', 'ncaab', 'cfb', 'cbb'],
+    basketball: ['basketball', 'ncaab', 'cbb', 'nba', 'wnba'],
+    baseball: ['baseball', 'mlb'],
+    hockey: ['hockey', 'nhl'],
+    soccer: ['soccer', 'football', 'mls', 'epl', 'premier', 'laliga', 'uefa', 'fifa'],
+    fight: ['fight', 'ufc', 'boxing', 'ppv', 'mma'],
+    boxing: ['boxing', 'ppv', 'fight'],
+    racing: ['racing', 'nascar', 'f1', 'formula', 'indycar', 'motogp'],
+    golf: ['golf', 'pga', 'lpga'],
+    tennis: ['tennis', 'atp', 'wta', 'open'],
+    wrestling: ['wrestling', 'wwe', 'aew']
+  };
   var QUALITY_RANK = { '4K': 0, FHD: 1, HD: 2, '': 3, SD: 4, CAM: 5 };
-  var SECTION_RANK = { vod: 0, series: 1, live: 2 };
 
   function searchWords(text) {
     var words = Xtream.foldText(text).replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
@@ -665,36 +705,147 @@
     return strong.length ? strong : words;
   }
 
+  // Build a matcher: every "hard" word must start a word in the text; sport / soft
+  // words only raise the rank, unless they're all the query has.
+  function makeMatcher(query) {
+    var words = searchWords(query);
+    var hard = [];
+    var soft = [];
+    words.forEach(function (w) {
+      if (SPORT_SYNONYMS[w]) soft.push(SPORT_SYNONYMS[w]);
+      else if (SOFT_WORDS[w]) soft.push([w]);
+      else hard.push(w);
+    });
+    if (!hard.length) { hard = soft; soft = []; } else hard = hard.map(function (w) { return [w]; });
+    var has = function (text, alts) {
+      for (var i = 0; i < alts.length; i++) if (text.indexOf(' ' + alts[i]) >= 0) return true;
+      return false;
+    };
+    return {
+      sporty: words.some(function (w) { return SPORT_SYNONYMS[w]; }),
+      // -1 = no match, otherwise how many optional words were missed (0 = perfect)
+      test: function (text) {
+        for (var i = 0; i < hard.length; i++) if (!has(text, hard[i])) return -1;
+        var missed = 0;
+        for (var j = 0; j < soft.length; j++) if (!has(text, soft[j])) missed++;
+        return missed;
+      }
+    };
+  }
+
   function runSearch() {
     var q = state.query.trim();
     if (!q) { state.searchResults = []; return; }
-    var words = searchWords(q);
-    var qClean = Lang.cleanTitle(q);
-    var qNoArticle = qClean.replace(/^(the|a|an) /, '');
+    var matcher = makeMatcher(q);
+    var qClean = Lang.cleanTitle(q).replace(/^(the|a|an) /, '');
     var results = [];
+    var now = Date.now();
+
     CONTENT_SECTIONS.forEach(function (sec) {
       var catalog = state.catalogs[sec];
       if (!catalog) return;
       catalog.items.forEach(function (it) {
-        for (var i = 0; i < words.length; i++) if (it._search.indexOf(words[i]) < 0) return;
+        var missed = matcher.test(it._search);
+        if (missed < 0) return;
         var clean = it._clean.replace(/^(the|a|an) /, '');
-        it._score = clean === qNoArticle ? 0 : clean.indexOf(qNoArticle) === 0 ? 1 : 2;
+        it._missed = missed;
+        it._score = clean === qClean ? 0 : clean.indexOf(qClean) === 0 ? 1 : 2;
+        // For a game search, a channel named after the game beats a show that airs later
+        if (matcher.sporty && sec === 'live') it._score = 0.25;
         results.push(it);
       });
     });
+
+    // Programme guide: find channels airing a matching show now or in the next 24 hours
+    var g = state.guide;
+    if (g.status === 'ready') {
+      var seen = {};
+      g.list.forEach(function (prog) {
+        var missed = matcher.test(prog._search);
+        if (missed < 0) return;
+        (g.channels[prog.channel] || []).forEach(function (ch) {
+          var k = ch._key + '@' + prog.start;
+          if (seen[k]) return;
+          seen[k] = true;
+          var hit = Object.create(ch); // same channel, plus what's on
+          hit._epg = prog;
+          hit._missed = missed;
+          hit._score = prog.start <= now ? -1 : 0.5;
+          results.push(hit);
+        });
+      });
+    }
+
     var sel = prefLang('vod');
+    var sectionRank = matcher.sporty ? { live: 0, vod: 1, series: 2 } : { vod: 0, series: 1, live: 2 };
     results.sort(function (a, b) {
+      if (a._missed !== b._missed) return a._missed - b._missed;
       if (a._score !== b._score) return a._score - b._score;
+      if (a._epg && b._epg && a._epg.start !== b._epg.start) return a._epg.start - b._epg.start;
       var la = langMatch(a, sel) ? 0 : 1;
       var lb = langMatch(b, sel) ? 0 : 1;
       if (la !== lb) return la - lb;
-      if (a._section !== b._section) return SECTION_RANK[a._section] - SECTION_RANK[b._section];
+      if (a._section !== b._section) return sectionRank[a._section] - sectionRank[b._section];
       var qa = QUALITY_RANK[a._quality] || 0;
       var qb = QUALITY_RANK[b._quality] || 0;
       if (qa !== qb) return qa - qb;
       return Number(b.added || 0) - Number(a.added || 0);
     });
-    state.searchResults = results;
+    state.searchResults = results.slice(0, 600);
+  }
+
+  // ------------------------------------------------------------------ programme guide (for live-event search)
+
+  var GUIDE_TTL = 3 * 3600 * 1000;
+
+  function loadGuide() {
+    var g = state.guide;
+    if (g.status === 'loading' || (g.status === 'ready' && Date.now() - g.at < GUIDE_TTL)) return;
+    var live = state.catalogs.live;
+    if (!live || !state.api) return;
+    var channels = {};
+    live.items.forEach(function (it) {
+      var id = String(it.epg_channel_id || '').toLowerCase();
+      if (!id) return;
+      (channels[id] = channels[id] || []).push(it);
+    });
+    if (!Object.keys(channels).length) { g.status = 'none'; return; }
+    g.status = 'loading';
+    g.bytes = 0;
+    var now = Date.now();
+    var api = state.api;
+    api.guide(channels, now, now + 24 * 3600 * 1000, function (bytes) { g.bytes = bytes; }).then(function (list) {
+      if (api !== state.api) return;
+      list.forEach(function (p) {
+        p._search = ' ' + Xtream.foldText(p.title + ' ' + p.sub).replace(/[^a-z0-9]+/g, ' ') + ' ';
+      });
+      g.list = list;
+      g.channels = channels;
+      g.status = 'ready';
+      g.at = Date.now();
+      if (state.section === 'search' && state.screen === 'browse') refreshSearchView();
+    }, function (err) {
+      g.status = 'error';
+      g.error = err && err.message;
+      if (state.section === 'search') refreshSearchView();
+    });
+  }
+
+  function guideStatusText() {
+    var g = state.guide;
+    if (g.status === 'ready') return 'TV guide: ' + g.list.length + ' upcoming programs';
+    if (g.status === 'loading') return 'TV guide loading' + (g.bytes ? ' (' + Math.round(g.bytes / 1048576) + ' MB)' : '') + '…';
+    if (g.status === 'error') return 'TV guide unavailable (' + g.error + ')';
+    if (g.status === 'none') return 'This provider has no TV guide';
+    return '';
+  }
+
+  function refreshSearchView() {
+    var zone = state.zone;
+    runSearch();
+    buildCatList();
+    applyCategory();
+    if (zone !== state.zone) setZone(zone);
   }
 
   function searchedCounts() {
@@ -706,8 +857,14 @@
 
   // ------------------------------------------------------------------ browse: grid
 
+  function allLive() {
+    for (var i = 0; i < state.view.length; i++) if (state.view[i]._section !== 'live') return false;
+    return state.view.length > 0;
+  }
+
   function gridGeom() {
-    var g = CARD[state.section] || CARD.vod;
+    // Search results that are all channels (e.g. a game search) get wide channel tiles
+    var g = CARD[state.section === 'search' && allLive() ? 'live' : state.section] || CARD.vod;
     var el = $('grid');
     var cols = Math.max(1, Math.floor((el.clientWidth + g.gap) / (g.w + g.gap)));
     var rows = Math.max(1, Math.floor((el.clientHeight + g.gap) / (g.h + g.gap)));
@@ -716,7 +873,11 @@
 
   function badges(it) {
     var b = '';
-    if (state.section === 'search' && it._section !== 'vod') b += '<span class="badge kind">' + (it._section === 'live' ? 'LIVE' : 'SERIES') + '</span>';
+    if (it._epg) {
+      b += it._epg.start <= Date.now() ? '<span class="badge onnow">ON NOW</span>' : '<span class="badge kind">' + fmtWhen(it._epg.start) + '</span>';
+    } else if (state.section === 'search' && it._section !== 'vod') {
+      b += '<span class="badge kind">' + (it._section === 'live' ? 'LIVE' : 'SERIES') + '</span>';
+    }
     // In a section the English view is the norm, so only flag other languages there
     if (it._lang && (state.section === 'search' || it._lang !== 'en')) b += '<span class="badge">' + esc(it._lang.toUpperCase()) + '</span>';
     if (it._quality) b += '<span class="badge' + (it._quality === 'CAM' ? ' cam' : '') + '">' + esc(it._quality) + '</span>';
@@ -733,13 +894,15 @@
         msg = q
           ? 'No matches for “' + esc(q) + '” in ' + searchedCounts() + '.<br><br>' +
             'Try one distinctive word (e.g. “odyssey”), or pick <b>Reload all lists</b> or <b>Deep scan for hidden titles</b> on the left.'
-          : 'Type a title in the box above. Searches ' + searchedCounts() + ' in every language.';
+          : 'Type a title, show or game in the box above, like “the odyssey” or “notre dame football”. Searches ' +
+            searchedCounts() + ' in every language.';
+        msg += '<br><br><span class="muted">' + esc(guideStatusText()) + '</span>';
       }
       el.innerHTML = '<div class="empty">' + msg + '</div>';
       return;
     }
     var geo = gridGeom();
-    var imgH = state.section === 'live' ? geo.h - 44 : geo.h;
+    var imgH = geo.h === CARD.live.h ? geo.h - 44 : geo.h;
     var html = '';
     var start = state.gridTop * geo.cols;
     var end = Math.min(view.length, (state.gridTop + geo.rows) * geo.cols);
@@ -755,7 +918,7 @@
         '<div class="ph" style="height:' + imgH + 'px">' + initial + '</div>' +
         (img ? '<img src="' + esc(img) + '" style="height:' + imgH + 'px" onerror="this.parentNode.removeChild(this)">' : '') +
         badges(it) +
-        '<div class="label">' + (it._section === 'live' && it.num ? esc(it.num) + ' · ' : '') + esc(it._name) + '</div>' +
+        '<div class="label">' + (it._epg ? esc(it._epg.title) : (it._section === 'live' && it.num ? esc(it.num) + ' · ' : '') + esc(it._name)) + '</div>' +
         (state.favs[it._section][it._key] ? '<div class="fav">★</div>' : '') +
         '</div>';
     }
@@ -783,6 +946,13 @@
     clearTimeout(epgTimer);
     if (!it) { el.innerHTML = ''; return; }
     var parts = [];
+    if (it._epg) {
+      var on = it._epg.start <= Date.now();
+      el.innerHTML = '<b>' + esc(it._epg.title) + (it._epg.sub ? ' · ' + esc(it._epg.sub) : '') + '</b><br>' +
+        (on ? 'On now' : fmtWhen(it._epg.start)) + ' (' + fmtClock(it._epg.start) + '–' + fmtClock(it._epg.stop) + ') on ' +
+        esc(it._name) + ' · ' + (state.gridFocus + 1) + ' of ' + state.view.length + ' · <span class="muted">OK to tune in</span>';
+      return;
+    }
     if (state.section === 'search') parts.push({ vod: 'Movie', series: 'Series', live: 'Live channel' }[it._section]);
     if (it._lang) parts.push(esc(Lang.name(it._lang)));
     if (it._quality) parts.push(esc(it._quality));
@@ -838,7 +1008,8 @@
       var lives = state.view.filter(function (x) { return x._section === 'live'; });
       playLive(lives, lives.indexOf(it));
     } else if (it._section === 'vod') {
-      playVod({ kind: 'vod', title: it._name, url: state.api.movieUrl(it), resumeKey: 'm' + it._key });
+      playVod({ kind: 'vod', title: it._name, url: state.api.movieUrl(it), resumeKey: 'm' + it._key,
+        history: { key: 'm' + it._key, kind: 'vod', name: it._name, stream_id: it.stream_id, ext: it.container_extension, image: itemImage(it) } });
     } else if (it._section === 'series') {
       openSeries(it);
     }
@@ -961,6 +1132,7 @@
     }
     renderTabs();
     if (state.section === 'info') { renderInfo(); return; }
+    if (state.section === 'home') { renderHome(); return; }
     if (state.catList.length) {
       renderCats();
       renderGrid();
@@ -983,7 +1155,8 @@
       else if (code === KEY.ENTER || code === KEY.DOWN) {
         var sec = SECTIONS[state.tabFocus];
         var stale = state.catalogs[sec] && Date.now() - state.catalogs[sec].loadedAt > STALE_MS;
-        if (sec !== state.section || (sec !== 'info' && !state.catList.length) || stale) selectSection(sec, true);
+        if (sec === 'home') selectSection('home', true);
+        else if (sec !== state.section || (sec !== 'info' && !state.catList.length) || stale) selectSection(sec, true);
         else setZone(sec === 'info' ? 'info' : sec === 'search' ? 'search' : 'cats');
       } else if (code === KEY.BACK) { exitApp(); }
       else return false;
@@ -1056,6 +1229,8 @@
       return true;
     }
 
+    if (z === 'home') return homeKey(code);
+
     if (z === 'info') {
       if (code === KEY.LEFT && state.infoFocus > 0) { state.infoFocus--; renderInfo(); }
       else if (code === KEY.RIGHT && state.infoFocus < INFO_ACTIONS.length - 1) { state.infoFocus++; renderInfo(); }
@@ -1071,6 +1246,210 @@
     try { window.close(); } catch (e) { /* not allowed in desktop browsers */ }
   }
 
+  // ------------------------------------------------------------------ watch history
+
+  var HISTORY_MAX = 60;
+
+  function historyList() { return store.get('history', []); }
+
+  function historySave(list) { store.set('history', list.slice(0, HISTORY_MAX)); }
+
+  function historyPut(entry) {
+    var list = historyList().filter(function (e) {
+      if (e.key === entry.key) return false;
+      // One Continue Watching card per show
+      return !(entry.kind === 'episode' && e.kind === 'episode' && String(e.series_id) === String(entry.series_id));
+    });
+    entry.at = Date.now();
+    list.unshift(entry);
+    historySave(list);
+  }
+
+  function historyUpdate(key, fields) {
+    var list = historyList();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].key !== key) continue;
+      Object.keys(fields).forEach(function (k) { list[i][k] = fields[k]; });
+      list[i].at = Date.now();
+      historySave(list);
+      return;
+    }
+  }
+
+  function historyRemove(key) {
+    historySave(historyList().filter(function (e) { return e.key !== key; }));
+  }
+
+  // Started (30 s+) but not finished, or the next episode of a show you're watching
+  function continueWatching() {
+    return historyList().filter(function (e) { return e.kind !== 'live' && !e.done && (e.next || e.pos >= 30); });
+  }
+
+  function recentChannels() {
+    return historyList().filter(function (e) { return e.kind === 'live'; }).slice(0, 20);
+  }
+
+  function channelFromHistory(e) {
+    return { stream_id: e.stream_id, num: e.num, _name: e.name, _key: String(e.stream_id), stream_icon: e.image,
+      epg_channel_id: e.epg, _section: 'live', _langs: {}, _cats: [] };
+  }
+
+  // After an episode ends (or reaches the credits), queue the next one as "Up next"
+  function queueNextEpisode() {
+    var sr = state.series;
+    var season = sr && sr.seasons[sr.seasonIdx];
+    if (!season) return;
+    var nextIdx = sr.epIdx + 1;
+    var seasonIdx = sr.seasonIdx;
+    if (nextIdx >= season.eps.length) {
+      if (seasonIdx + 1 >= sr.seasons.length) return;
+      seasonIdx++;
+      nextIdx = 0;
+    }
+    var s = sr.seasons[seasonIdx];
+    historyPut(episodeHistory(sr, s, s.eps[nextIdx], nextIdx, { next: true, pos: 0 }));
+  }
+
+  function episodeHistory(sr, season, ep, idx, extra) {
+    var e = {
+      key: 'e' + ep.id, kind: 'episode', name: sr.item._name, series_id: sr.item.series_id, episode_id: ep.id,
+      season: season.num, ep: ep.episode_num || idx + 1, title: ep.title || '', ext: ep.container_extension,
+      image: sr.cover || (ep.info && ep.info.movie_image) || '', pos: 0, dur: 0
+    };
+    if (extra) Object.keys(extra).forEach(function (k) { e[k] = extra[k]; });
+    return e;
+  }
+
+  function playHistory(e) {
+    if (e.kind === 'live') {
+      var list = recentChannels().map(channelFromHistory);
+      var idx = 0;
+      list.forEach(function (c, i) { if (c._key === String(e.stream_id)) idx = i; });
+      playLive(list, idx);
+    } else if (e.kind === 'vod') {
+      playVod({
+        kind: 'vod', title: e.name, url: state.api.movieUrl({ stream_id: e.stream_id, container_extension: e.ext }),
+        resumeKey: 'm' + e.stream_id, history: e, prevScreen: 'browse'
+      });
+    } else if (e.kind === 'episode') {
+      // Load the show so the next episode can follow automatically
+      var token = showLoading('Loading ' + e.name + '…');
+      state.api.seriesInfo(e.series_id).then(function (data) {
+        if (token !== state.loadToken) return;
+        hideLoading();
+        var seasons = groupSeasons(data || {});
+        var info = (data && data.info) || {};
+        for (var si = 0; si < seasons.length; si++) {
+          for (var ei = 0; ei < seasons[si].eps.length; ei++) {
+            if (String(seasons[si].eps[ei].id) === String(e.episode_id)) {
+              state.series = { item: { _name: e.name, series_id: e.series_id }, cover: info.cover || e.image, seasons: seasons,
+                seasonIdx: si, epIdx: ei, epTop: 0, zone: 'episodes' };
+              playEpisode(ei, 'browse');
+              return;
+            }
+          }
+        }
+        toast('That episode is no longer on the server.', 5000);
+      }, function (err) {
+        if (token !== state.loadToken) return;
+        hideLoading();
+        toast('Could not load ' + e.name + ': ' + (err && err.message), 5000);
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------ home
+
+  var HOME_CARD = { poster: { w: 200, h: 300, gap: 24 }, live: { w: 260, h: 170, gap: 24 } };
+
+  function homeRows() {
+    var rows = [];
+    var cw = continueWatching();
+    if (cw.length) rows.push({ id: 'cw', title: 'Continue watching', items: cw, card: 'poster' });
+    var ch = recentChannels();
+    if (ch.length) rows.push({ id: 'recent', title: 'Recent channels', items: ch, card: 'live' });
+    return rows;
+  }
+
+  function homeCardHtml(e, r, c, focused, g) {
+    var sub = '';
+    var pct = 0;
+    if (e.kind === 'episode') {
+      sub = (e.next ? 'Up next · ' : '') + 'S' + e.season + ' E' + e.ep + (e.title ? ' · ' + e.title : '');
+    } else if (e.kind === 'vod' && e.dur) {
+      sub = Math.max(1, Math.round((e.dur - e.pos) / 60)) + ' min left';
+    }
+    if (e.dur && e.pos) pct = Math.min(100, 100 * e.pos / e.dur);
+    var imgH = e.kind === 'live' ? g.h - 44 : g.h;
+    var initial = esc(String(e.name).replace(/^[^A-Za-z0-9]+/, '').charAt(0).toUpperCase() || '?');
+    return '<div class="card ' + (e.kind === 'live' ? 'live' : 'vod') + (focused ? ' focused' : '') + '" data-home="' + r + ':' + c + '" style="left:' +
+      (c * (g.w + g.gap)) + 'px;top:0;width:' + g.w + 'px;height:' + g.h + 'px">' +
+      '<div class="ph" style="height:' + imgH + 'px">' + initial + '</div>' +
+      (e.image ? '<img src="' + esc(e.image) + '" style="height:' + imgH + 'px" onerror="this.parentNode.removeChild(this)">' : '') +
+      '<div class="label">' + (e.kind === 'live' && e.num ? esc(e.num) + ' · ' : '') + esc(e.name) +
+      (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>' +
+      (pct ? '<div class="progress"><div style="width:' + pct.toFixed(1) + '%"></div></div>' : '') +
+      '</div>';
+  }
+
+  function renderHome() {
+    var el = $('home');
+    var rows = homeRows();
+    var h = state.home;
+    if (!rows.length) {
+      el.innerHTML = '<div class="home-empty"><h2>Welcome back</h2><p>Movies and episodes you start will appear here under ' +
+        '<b>Continue watching</b>, so you can pick up where you left off. Channels you watch show up under <b>Recent channels</b>.</p>' +
+        '<p class="muted">Use ◀ ▶ on the tabs above to browse Live TV, Movies, Series or Search.</p></div>';
+      return;
+    }
+    if (h.row >= rows.length) h.row = rows.length - 1;
+    var width = el.clientWidth - 100;
+    var html = '';
+    rows.forEach(function (row, r) {
+      var g = HOME_CARD[row.card];
+      var col = Math.min(h.cols[r] || 0, row.items.length - 1);
+      h.cols[r] = col;
+      var visible = Math.max(1, Math.floor((width + g.gap) / (g.w + g.gap)));
+      var offset = Math.max(0, col - visible + 1) * (g.w + g.gap);
+      html += '<section class="hrow"><h2>' + esc(row.title) + ' <span class="muted">' + row.items.length + '</span></h2>' +
+        '<div class="strip" style="height:' + g.h + 'px"><div class="strip-inner" style="transform:translateX(' + (-offset) + 'px)">';
+      row.items.forEach(function (e, c) {
+        html += homeCardHtml(e, r, c, state.zone === 'home' && r === h.row && c === col, g);
+      });
+      html += '</div></div></section>';
+    });
+    var focus = rows[h.row] && rows[h.row].items[h.cols[h.row]];
+    if (focus && state.zone === 'home') {
+      html += '<div class="home-hint muted">OK to ' + (focus.kind === 'live' ? 'watch' : focus.next ? 'play the next episode' : 'resume') +
+        ' · Red / F: remove from this row</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  function homeKey(code) {
+    var rows = homeRows();
+    var h = state.home;
+    if (!rows.length) {
+      if (code === KEY.UP || code === KEY.BACK) { setZone('tabs'); return true; }
+      return false;
+    }
+    var row = rows[h.row];
+    var col = h.cols[h.row] || 0;
+    if (code === KEY.LEFT && col > 0) h.cols[h.row] = col - 1;
+    else if (code === KEY.RIGHT && col < row.items.length - 1) h.cols[h.row] = col + 1;
+    else if (code === KEY.UP) { if (h.row > 0) h.row--; else { setZone('tabs'); return true; } }
+    else if (code === KEY.DOWN && h.row < rows.length - 1) h.row++;
+    else if (code === KEY.ENTER) { playHistory(row.items[col]); return true; }
+    else if (code === KEY.RED || code === KEY.F) {
+      historyRemove(row.items[col].key);
+      toast('Removed from ' + row.title);
+      if (!homeRows().length) { renderHome(); setZone('tabs'); return true; }
+    } else if (code === KEY.BACK) { setZone('tabs'); return true; }
+    else if (code !== KEY.LEFT && code !== KEY.RIGHT && code !== KEY.DOWN) return false;
+    renderHome();
+    return true;
+  }
+
   // ------------------------------------------------------------------ series
 
   function openSeries(item) {
@@ -1080,8 +1459,8 @@
       hideLoading();
       var seasons = groupSeasons(data || {});
       var info = (data && data.info) || {};
-      state.series = { item: item, seasons: seasons, seasonIdx: 0, epIdx: 0, epTop: 0, zone: seasons.length ? 'episodes' : 'seasons' };
       var cover = info.cover || item.cover || '';
+      state.series = { item: item, cover: cover, seasons: seasons, seasonIdx: 0, epIdx: 0, epTop: 0, zone: seasons.length ? 'episodes' : 'seasons' };
       $('series-cover').style.visibility = cover ? '' : 'hidden';
       $('series-cover').src = cover;
       $('series-title').textContent = info.name || item._name;
@@ -1153,7 +1532,7 @@
     el.innerHTML = html;
   }
 
-  function playEpisode(idx) {
+  function playEpisode(idx, prevScreen) {
     var sr = state.series;
     var season = sr.seasons[sr.seasonIdx];
     var ep = season && season.eps[idx];
@@ -1165,7 +1544,8 @@
       subtitle: season.name + ' · E' + (ep.episode_num || idx + 1) + ' · ' + (ep.title || ''),
       url: state.api.episodeUrl(ep),
       resumeKey: 'e' + ep.id,
-      prevScreen: 'series'
+      prevScreen: prevScreen || 'series',
+      history: episodeHistory(sr, season, ep, idx)
     });
   }
 
@@ -1228,6 +1608,8 @@
     if (!it) return;
     if (state.screen !== 'player') state.prevScreen = state.screen;
     state.player = { kind: 'live', list: list, index: idx, ext: state.settings.liveExt, triedAlt: false };
+    historyPut({ key: 'l' + it.stream_id, kind: 'live', name: it._name, num: it.num, stream_id: it.stream_id,
+      image: it.stream_icon || '', epg: it.epg_channel_id || '' });
     showScreen('player');
     $('osd-title').textContent = (it.num ? it.num + ' · ' : '') + it._name;
     $('osd-sub').textContent = '';
@@ -1245,7 +1627,17 @@
 
   function playVod(opts) {
     if (state.screen !== 'player') state.prevScreen = opts.prevScreen || state.screen;
-    state.player = { kind: opts.kind, resumeKey: opts.resumeKey, resumed: false };
+    state.player = { kind: opts.kind, resumeKey: opts.resumeKey, resumed: false, historyKey: opts.history ? opts.history.key : null };
+    if (opts.history) {
+      var prev = historyList().filter(function (e) { return e.key === opts.history.key; })[0];
+      var entry = {};
+      Object.keys(opts.history).forEach(function (k) { entry[k] = opts.history[k]; });
+      entry.next = false;
+      entry.done = false;
+      entry.pos = prev ? prev.pos : 0;
+      entry.dur = prev ? prev.dur : 0;
+      historyPut(entry);
+    }
     showScreen('player');
     $('osd-title').textContent = opts.title;
     $('osd-sub').textContent = opts.subtitle || '';
@@ -1261,8 +1653,14 @@
     var p = state.player;
     if (!p || !p.resumeKey || !video.duration || !isFinite(video.duration)) return;
     var t = video.currentTime;
-    if (t > 30 && t < video.duration - 60) store.set('pos.' + p.resumeKey, Math.floor(t));
+    var d = video.duration;
+    var finished = t >= d - 60 || t / d > 0.95;
+    if (t > 30 && !finished) store.set('pos.' + p.resumeKey, Math.floor(t));
     else store.remove('pos.' + p.resumeKey);
+    if (p.historyKey) {
+      historyUpdate(p.historyKey, { pos: Math.floor(t), dur: Math.floor(d), done: finished });
+      if (finished && p.kind === 'episode' && !p.queuedNext) { p.queuedNext = true; queueNextEpisode(); }
+    }
   }
 
   function closePlayer() {
@@ -1276,6 +1674,7 @@
     playerMsg('');
     showScreen(state.prevScreen || 'browse');
     if (state.screen === 'series') renderSeries();
+    if (state.screen === 'browse' && state.section === 'home') renderHome();
   }
 
   function onVideoError() {
@@ -1322,7 +1721,7 @@
     var i = sr.epIdx + dir;
     if (i < 0 || i >= season.eps.length) return false;
     savePosition();
-    playEpisode(i);
+    playEpisode(i, state.prevScreen);
     return true;
   }
 
@@ -1372,6 +1771,8 @@
       var p = state.player;
       if (!p) return;
       if (p.resumeKey) store.remove('pos.' + p.resumeKey);
+      if (p.historyKey) historyUpdate(p.historyKey, { done: true });
+      if (p.kind === 'episode' && !p.queuedNext) { p.queuedNext = true; queueNextEpisode(); }
       if (p.kind === 'episode' && nextEpisode(1)) return;
       if (p.kind !== 'live') closePlayer();
     });
@@ -1422,6 +1823,13 @@
       if ((t = closest(e.target, 'data-section'))) {
         state.tabFocus = SECTIONS.indexOf(t.getAttribute('data-section'));
         selectSection(t.getAttribute('data-section'), true);
+      } else if ((t = closest(e.target, 'data-home'))) {
+        var rc = t.getAttribute('data-home').split(':');
+        state.home.row = Number(rc[0]);
+        state.home.cols[state.home.row] = Number(rc[1]);
+        setZone('home');
+        var hr = homeRows()[state.home.row];
+        if (hr) playHistory(hr.items[Number(rc[1])]);
       } else if ((t = closest(e.target, 'data-lang'))) {
         if (state.langPick) chooseLang(state.langPick.options[Number(t.getAttribute('data-lang'))].code);
       } else if ((t = closest(e.target, 'data-cat'))) {

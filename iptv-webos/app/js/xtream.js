@@ -132,6 +132,101 @@
       });
   };
 
+  Xtream.prototype.xmltvUrl = function () {
+    return this.server + '/xmltv.php?username=' + encodeURIComponent(this.username) +
+      '&password=' + encodeURIComponent(this.password);
+  };
+
+  // "20260930193000 -0400" -> ms since epoch
+  function parseXmltvTime(s) {
+    var m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?\s*([+-])?(\d{2})?(\d{2})?/.exec(String(s || '').trim());
+    if (!m) return NaN;
+    var t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    if (m[7]) t -= (m[7] === '-' ? -1 : 1) * ((+m[8]) * 60 + (+(m[9] || 0))) * 60000;
+    return t;
+  }
+
+  function unescapeXml(s) {
+    return String(s || '')
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+      .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(+n); })
+      .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); })
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+      .trim();
+  }
+
+  function attr(attrs, name) {
+    var m = new RegExp('\\b' + name + '="([^"]*)"').exec(attrs);
+    return m ? m[1] : '';
+  }
+
+  function tag(body, name) {
+    var m = new RegExp('<' + name + '\\b[^>]*>([\\s\\S]*?)</' + name + '>').exec(body);
+    return m ? unescapeXml(m[1]) : '';
+  }
+
+  /*
+   * Download the XMLTV guide and keep only programmes that end after `from`,
+   * start before `to`, and belong to a channel in `wanted` (lower-cased
+   * epg_channel_id -> true). The file is parsed as it streams in, so a
+   * 100 MB guide never has to sit in the TV's memory at once.
+   */
+  Xtream.prototype.guide = function (wanted, from, to, onProgress) {
+    return withTimeout(fetch(this.xmltvUrl()), 5 * 60000).then(function (res) {
+      if (!res.ok) throw new Error('Guide request returned HTTP ' + res.status);
+      var out = [];
+      var buf = '';
+      var bytes = 0;
+      var re = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g;
+
+      function consume() {
+        var m;
+        var last = 0;
+        re.lastIndex = 0;
+        while ((m = re.exec(buf))) {
+          last = re.lastIndex;
+          var ch = attr(m[1], 'channel').toLowerCase();
+          if (!wanted[ch]) continue;
+          var start = parseXmltvTime(attr(m[1], 'start'));
+          var stop = parseXmltvTime(attr(m[1], 'stop'));
+          if (!(stop > from) || !(start < to)) continue;
+          out.push({ channel: ch, title: tag(m[2], 'title'), sub: tag(m[2], 'sub-title'), start: start, stop: stop });
+        }
+        buf = buf.slice(last);
+        var p = buf.indexOf('<programme');
+        if (p > 0) buf = buf.slice(p);
+        else if (p < 0 && buf.length > 4096) buf = buf.slice(-4096); // skip the <channel> list
+      }
+
+      if (res.body && res.body.getReader && global.TextDecoder) {
+        var reader = res.body.getReader();
+        var dec = new TextDecoder('utf-8');
+        var pump = function () {
+          return reader.read().then(function (r) {
+            if (r.done) {
+              buf += dec.decode();
+              consume();
+              return out;
+            }
+            bytes += r.value.length;
+            buf += dec.decode(r.value, { stream: true });
+            consume();
+            if (onProgress) onProgress(bytes, out.length);
+            return pump();
+          });
+        };
+        return pump();
+      }
+      return res.text().then(function (text) {
+        buf = text;
+        consume();
+        return out;
+      });
+    });
+  };
+
+  Xtream.parseXmltvTime = parseXmltvTime;
+
   Xtream.prototype.liveUrl = function (item, ext) {
     return this.server + '/live/' + encodeURIComponent(this.username) + '/' +
       encodeURIComponent(this.password) + '/' + item.stream_id + '.' + (ext || 'm3u8');

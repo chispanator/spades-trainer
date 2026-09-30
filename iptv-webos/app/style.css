@@ -130,6 +130,24 @@ html, body {
   color: #fff; background: rgba(13, 17, 23, 0.82); border-radius: 5px;
 }
 .card .badge.cam { background: #b3261e; }
+.card .badge.onnow { background: #e5484d; }
+.card .label .sub { color: var(--muted); font-size: 19px; overflow: hidden; text-overflow: ellipsis; }
+.card .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 8px; background: rgba(255, 255, 255, 0.2); }
+.card .progress div { height: 100%; background: var(--accent); }
+
+/* ---------- Home ---------- */
+#home { display: none; position: absolute; left: 0; right: 0; top: 0; bottom: 0; padding: 36px 50px; overflow: hidden; }
+.home-mode #home { display: block; }
+.home-mode #cats, .home-mode #content { display: none; }
+.hrow { margin-bottom: 40px; }
+.hrow h2 { margin: 0 0 16px; font-size: 34px; }
+.hrow h2 .muted { font-size: 26px; font-weight: normal; margin-left: 8px; }
+.strip { position: relative; overflow: hidden; margin: -8px; padding: 8px; box-sizing: content-box; }
+.strip-inner { position: absolute; left: 8px; top: 8px; transition: transform 0.2s; }
+.hrow .card.vod .label { white-space: normal; bottom: 8px; }
+.home-hint { position: absolute; left: 50px; bottom: 26px; font-size: 24px; }
+.home-empty { max-width: 1100px; margin-top: 80px; font-size: 30px; line-height: 1.5; }
+.home-empty h2 { font-size: 48px; margin: 0 0 20px; }
 .card .badge.kind { background: var(--accent); color: #001326; }
 .cat.action .name { color: var(--accent); }
 .card .fav { position: absolute; right: 8px; top: 6px; color: var(--focus); font-size: 30px; }

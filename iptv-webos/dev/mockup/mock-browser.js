@@ -72,7 +72,62 @@
       num++;
     });
   });
-  live.push({ num: 90, name: 'EN | Odyssey Movie Channel 24/7', stream_type: 'live', stream_id: 1090, stream_icon: logo('Odyssey Movie', 210), category_id: '6' });
+  live.push({ num: 90, name: 'EN | Odyssey Movie Channel 24/7', stream_type: 'live', stream_id: 1090, stream_icon: logo('Odyssey Movie', 210), category_id: '6', epg_channel_id: 'ody' });
+  // Network channels (the game is only findable through the TV guide) and event channels (named after the game)
+  liveCats.push('US | Network', 'USA | Live Events');
+  [['NBC East', 'nbc.us'], ['FOX 5 New York', 'fox5.us'], ['ESPN', 'espn.us'], ['ESPN 2', 'espn2.us']].forEach(function (c, k) {
+    live.push({ num: 100 + k, name: c[0], stream_type: 'live', stream_id: 1100 + k, stream_icon: logo(c[0], 20 + k * 70), category_id: '12', epg_channel_id: c[1] });
+  });
+  ['NCAAF 03: Notre Dame vs Navy 3:30PM ET', 'NCAAF 04: Alabama vs Georgia 7PM ET', 'NFL 01: Bears at Packers 1PM ET',
+    'NCAAB 07: Duke vs North Carolina 9PM ET', 'UFC 312: Main Card 10PM ET'].forEach(function (n, k) {
+    live.push({ num: 200 + k, name: n, stream_type: 'live', stream_id: 1200 + k, stream_icon: logo(n.split(':')[0], 0), category_id: '13', epg_channel_id: '' });
+  });
+
+  // 24 hours of programmes per channel
+  function schedule(c) {
+    var now = Date.now();
+    var slot = 30 * 60000;
+    var t = now - (now % slot) - slot;
+    var list = [];
+    var special = {
+      'nbc.us': [['College Football: Notre Dame at USC', 'NCAA Football', -40, 170], ['NBC Nightly News', '', 170, 200], ['Saturday Night Live', '', 200, 290]],
+      'espn.us': [['College GameDay', '', -60, 60], ['College Football: Notre Dame Postgame', 'Fighting Irish reaction', 180, 240], ['SportsCenter', '', 240, 300]],
+      'fox5.us': [['Good Day New York', '', -30, 90], ['NFL: Chicago Bears at Green Bay Packers', 'NFL Football', 120, 330]]
+    }[c.epg_channel_id];
+    if (special) {
+      special.forEach(function (sp) { list.push({ title: sp[0], sub: sp[1], start: now + sp[2] * 60000, stop: now + sp[3] * 60000 }); });
+      t = list[list.length - 1].stop;
+    }
+    for (var i = 0; i < 48 && t < now + 24 * 3600000; i++) {
+      list.push({ title: programs[(c.stream_id + i) % programs.length], sub: '', start: t, stop: t + slot });
+      t += slot;
+    }
+    return list;
+  }
+
+  function xmltvTime(ms) {
+    var d = new Date(ms);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getUTCFullYear() + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + p(d.getUTCHours()) + p(d.getUTCMinutes()) + '00 +0000';
+  }
+
+  function xmlEsc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+  function xmltv() {
+    var out = ['<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="mock">'];
+    live.forEach(function (c) {
+      if (c.epg_channel_id) out.push('<channel id="' + xmlEsc(c.epg_channel_id) + '"><display-name>' + xmlEsc(c.name) + '</display-name></channel>');
+    });
+    live.forEach(function (c) {
+      if (!c.epg_channel_id) return;
+      schedule(c).forEach(function (pr) {
+        out.push('<programme start="' + xmltvTime(pr.start) + '" stop="' + xmltvTime(pr.stop) + '" channel="' + xmlEsc(c.epg_channel_id) + '">' +
+          '<title lang="en">' + xmlEsc(pr.title) + '</title>' + (pr.sub ? '<sub-title>' + xmlEsc(pr.sub) + '</sub-title>' : '') + '</programme>');
+      });
+    });
+    out.push('</tv>');
+    return out.join('\n');
+  }
 
   // ---------- movies
   var adj = ['Silent', 'Midnight', 'Broken', 'Golden', 'Last', 'Hidden', 'Crimson', 'Frozen', 'Electric', 'Lost', 'Iron', 'Paper', 'Wild', 'Distant', 'Velvet'];
@@ -212,13 +267,11 @@
       case 'get_series': return byCat(series);
       case 'get_series_info': return seriesInfo(q.get('series_id'));
       case 'get_short_epg': {
-        var id = Number(q.get('stream_id'));
-        var now = Math.floor(Date.now() / 1000);
-        var slot = 1800;
-        var start = now - (now % slot);
-        return { epg_listings: [0, 1].map(function (k) {
-          return { title: b64(programs[(id + k + Math.floor(start / slot)) % programs.length]), description: b64(''),
-            start_timestamp: String(start + k * slot), stop_timestamp: String(start + (k + 1) * slot) };
+        var ch = live.filter(function (c) { return String(c.stream_id) === q.get('stream_id'); })[0];
+        if (!ch || !ch.epg_channel_id) return { epg_listings: [] };
+        var nowMs = Date.now();
+        return { epg_listings: schedule(ch).filter(function (pr) { return pr.stop > nowMs; }).slice(0, 2).map(function (pr) {
+          return { title: b64(pr.title), description: b64(pr.sub), start_timestamp: String(Math.floor(pr.start / 1000)), stop_timestamp: String(Math.floor(pr.stop / 1000)) };
         }) };
       }
       default: return [];
@@ -228,6 +281,11 @@
   var realFetch = window.fetch ? window.fetch.bind(window) : null;
   window.fetch = function (url) {
     url = String(url);
+    if (url.indexOf('/xmltv.php') >= 0) {
+      return new Promise(function (resolve) {
+        setTimeout(function () { resolve(new Response(xmltv(), { status: 200, headers: { 'Content-Type': 'application/xml' } })); }, 900);
+      });
+    }
     if (url.indexOf('/player_api.php') < 0) return realFetch(url);
     var q = new URL(url).searchParams;
     var action = q.get('action') || '';
@@ -280,7 +338,32 @@
       ctx.font = '24px Arial';
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.fillText((kind === 'live' ? '● LIVE  ' : '') + 'Sample video — the real stream plays here', 480, 300);
+      if (fake.on) {
+        ctx.font = '20px Arial';
+        ctx.fillText('Playing at 30× speed so progress shows up quickly', 480, 340);
+      }
     }
+
+    // Movies and episodes get a fake length and play at 30x, so Continue watching fills up quickly
+    var SPEED = 30;
+    var fake = { on: false, dur: 0, base: 0, t0: 0, running: false, ended: false };
+    var proto = HTMLMediaElement.prototype;
+    var nativeTime = Object.getOwnPropertyDescriptor(proto, 'currentTime');
+    var nativeDur = Object.getOwnPropertyDescriptor(proto, 'duration');
+    function fakeNow() { return Math.min(fake.dur, fake.base + (fake.running ? (Date.now() - fake.t0) / 1000 * SPEED : 0)); }
+    Object.defineProperty(video, 'duration', { configurable: true, get: function () { return fake.on ? fake.dur : nativeDur.get.call(video); } });
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: function () { return fake.on ? fakeNow() : nativeTime.get.call(video); },
+      set: function (v) { if (fake.on) { fake.base = Math.max(0, Math.min(fake.dur, v)); fake.t0 = Date.now(); } else nativeTime.set.call(video, v); }
+    });
+    video.addEventListener('playing', function () { if (fake.on && !fake.running) { fake.t0 = Date.now(); fake.running = true; } });
+    video.addEventListener('pause', function () { if (fake.on) { fake.base = fakeNow(); fake.running = false; } });
+    setInterval(function () {
+      if (!fake.on || !fake.running) return;
+      video.dispatchEvent(new Event('timeupdate'));
+      if (!fake.ended && fakeNow() >= fake.dur) { fake.ended = true; fake.running = false; video.dispatchEvent(new Event('ended')); }
+    }, 500);
 
     var nativeRemove = video.removeAttribute.bind(video);
     Object.defineProperty(video, 'src', {
@@ -300,6 +383,8 @@
         label = names[key];
         kind = m[1];
         t0 = Date.now();
+        fake = { on: kind !== 'live', dur: kind === 'series' ? 42 * 60 : 108 * 60, base: 0, t0: 0, running: false, ended: false };
+        if (fake.on) setTimeout(function () { video.dispatchEvent(new Event('loadedmetadata')); }, 300);
         if (!stream) stream = canvas.captureStream(24);
         clearInterval(timer);
         draw();
@@ -309,7 +394,7 @@
       }
     });
     video.removeAttribute = function (name) {
-      if (name === 'src') { clearInterval(timer); video.srcObject = null; }
+      if (name === 'src') { clearInterval(timer); video.srcObject = null; fake.on = false; }
       return nativeRemove(name);
     };
   });
