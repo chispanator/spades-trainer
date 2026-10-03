@@ -5,6 +5,7 @@ import { SEAT_NAME, Seat, partnerOf } from '@/lib/spades/cards';
 import { Difficulty, GameState, HUMAN, HandResult } from '@/lib/spades/game';
 import { BAG_TRUE_COST, OPPONENT_WEIGHT } from '@/lib/spades/playstate';
 import { TrickEstimate } from '@/lib/spades/mc';
+import { ModeSwitch } from '@/components/ModeSwitch';
 
 export function Scoreboard({ game }: { game: GameState }) {
   const rows: { label: string; team: 0 | 1 }[] = [
@@ -202,6 +203,8 @@ export interface Settings {
   targetScore: number;
   /** Prompt for a suit-by-suit trick count before each of the player's bids. */
   countPrompt: boolean;
+  /** Require a second tap to commit a card, so a mis-tap costs nothing. */
+  confirmPlays: boolean;
 }
 
 export function SettingsPanel({
@@ -259,6 +262,16 @@ export function SettingsPanel({
               { value: 'off', label: 'Off' },
             ]}
             onChange={(v) => onChange({ ...settings, countPrompt: v === 'on' })}
+          />
+          <Choice
+            label="Confirm each card"
+            hint="Tap once to pick, again to play. Stops a mis-tap costing a trick."
+            value={settings.confirmPlays ? 'on' : 'off'}
+            options={[
+              { value: 'on', label: 'On' },
+              { value: 'off', label: 'Off' },
+            ]}
+            onChange={(v) => onChange({ ...settings, confirmPlays: v === 'on' })}
           />
           <Choice
             label="Nil bids"
@@ -413,12 +426,12 @@ export function StartScreen({
           Deal the first hand
         </button>
 
-        <a
-          href="/table"
-          className="mt-4 block text-center text-xs text-[color:var(--muted)] underline underline-offset-2 hover:text-[color:var(--foreground)]"
-        >
-          Playing with other people? Pass one phone round the table
-        </a>
+        <div className="mt-6">
+          <p className="mb-2 text-center text-xs text-[color:var(--muted)]">
+            Two ways to play
+          </p>
+          <ModeSwitch current="trainer" />
+        </div>
       </div>
     </main>
   );

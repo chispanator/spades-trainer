@@ -25,6 +25,7 @@ import {
   submitBid,
 } from '@/lib/spades/game';
 import { GameTable } from '@/components/GameTable';
+import { ModeSwitch } from '@/components/ModeSwitch';
 import { HandCountResult, HandCountWorksheet } from '@/components/HandCount';
 import { PlayerHand } from '@/components/PlayerHand';
 import { AccuracyBar, BidFeedback, FeedbackCard, HintCard, ReviewList } from '@/components/Coach';
@@ -47,6 +48,7 @@ const DEFAULT_SETTINGS: Settings = {
   allowNil: true,
   targetScore: 350,
   countPrompt: true,
+  confirmPlays: true,
 };
 
 const AI_BID_DELAY = 420;
@@ -224,7 +226,18 @@ export default function Page() {
     <main className="mx-auto w-full max-w-6xl px-3 py-5 sm:px-6">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Spades Trainer</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Spades Trainer</h1>
+            <ModeSwitch
+              current="trainer"
+              size="compact"
+              guard={
+                game.phase !== 'gameComplete'
+                  ? 'Leave the trainer? This game is not saved, so the hand will be lost.'
+                  : null
+              }
+            />
+          </div>
           <p className="text-xs text-[color:var(--muted)]">
             Play a hand. Every card you choose is graded against a simulation of the deals your
             opponents could be holding.
@@ -253,6 +266,7 @@ export default function Page() {
             active={myTurn}
             hint={hint}
             restrictionNote={restrictionNote}
+            confirmPlays={settings.confirmPlays}
             onPlay={handlePlay}
           />
 

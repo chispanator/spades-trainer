@@ -139,3 +139,19 @@ body {
     animation: none;
   }
 }
+
+/* A card picked but not yet committed sits up out of the fan. */
+.hand-card-selected {
+  transform: translateY(calc(var(--card-w) * -0.3));
+  z-index: 25;
+}
+.hand-card-selected:hover,
+.hand-card-selected:focus-visible {
+  transform: translateY(calc(var(--card-w) * -0.3));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hand-card-selected {
+    transform: none;
+  }
+}

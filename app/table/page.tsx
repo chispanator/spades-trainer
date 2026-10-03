@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Card, Seat, suitOf, SUIT_NAME } from '@/lib/spades/cards';
 import {
@@ -21,6 +20,7 @@ import {
   saveRoster,
 } from '@/lib/spades/table';
 import { GameTable } from '@/components/GameTable';
+import { ModeSwitch } from '@/components/ModeSwitch';
 import { PlayerHand } from '@/components/PlayerHand';
 import { IconKeypad, IconPicker } from '@/components/table/IconKeypad';
 import { TableSetup } from '@/components/table/TableSetup';
@@ -172,12 +172,10 @@ export default function TablePage() {
           >
             Set up the table
           </button>
-          <Link
-            href="/"
-            className="mt-4 block text-center text-xs text-[color:var(--muted)] underline underline-offset-2 hover:text-[color:var(--foreground)]"
-          >
-            Looking for the solo trainer instead?
-          </Link>
+          <div className="mt-6">
+            <p className="mb-2 text-center text-xs text-[color:var(--muted)]">Two ways to play</p>
+            <ModeSwitch current="table" />
+          </div>
         </div>
       </main>
     );
@@ -242,15 +240,26 @@ export default function TablePage() {
 
   return (
     <main className="mx-auto w-full max-w-md px-3 py-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-base font-semibold tracking-tight">Spades at the Table</h1>
-        <button
-          type="button"
-          onClick={() => setScreen('setup')}
-          className="text-xs text-[color:var(--muted)] underline underline-offset-2 hover:text-[color:var(--foreground)]"
-        >
-          table
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setScreen('setup')}
+            className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium transition hover:bg-white/20"
+          >
+            Players
+          </button>
+          <ModeSwitch
+            current="table"
+            size="compact"
+            guard={
+              game.phase !== 'gameComplete'
+                ? 'Leave the table? This game is not saved, so the hand will be lost.'
+                : null
+            }
+          />
+        </div>
       </div>
 
       <TableScore game={game} roster={roster} />
@@ -272,6 +281,7 @@ export default function TablePage() {
           active={game.phase === 'playing'}
           hint={null}
           restrictionNote={restrictionNote}
+          confirmPlays
           onPlay={handlePlay}
         />
       )}
