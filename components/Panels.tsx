@@ -412,6 +412,13 @@ export function StartScreen({
         >
           Deal the first hand
         </button>
+
+        <a
+          href="/table"
+          className="mt-4 block text-center text-xs text-[color:var(--muted)] underline underline-offset-2 hover:text-[color:var(--foreground)]"
+        >
+          Playing with other people? Pass one phone round the table
+        </a>
       </div>
     </main>
   );

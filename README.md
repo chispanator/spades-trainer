@@ -1,5 +1,42 @@
 # Spades Trainer
 
+Two apps over one engine:
+
+- **`/`** — the solo trainer, where every bid and card you play is graded.
+- **`/table`** — pass-and-play spades for a single phone, for a family that has
+  no cards to hand.
+
+## Spades at the Table
+
+One phone goes round the table. Each player chooses a secret key at setup — an
+icon, picked in private, that nobody else sees — and their hand only appears
+when that key is tapped. A wrong tap says only that it was wrong: it never names
+the right key, and it never marks a key as already taken, since telling somebody
+a key is taken tells them something about somebody else's hand. Keys are allowed
+to collide for the same reason.
+
+While the phone is being passed the hand is not merely hidden, it is **not in
+the page at all** — the cards are only rendered once the right key is in.
+
+The handoff is its own screen: the keypad plus a compact strip of what the whole
+table may see anyway. That is partly space (the keypad is tapped forty-odd times
+a hand and must never need scrolling to) and partly discretion — less of the
+board is on show over somebody's shoulder.
+
+A card that is the only legal one is not a decision, so it plays itself and the
+phone stays put. Nothing is announced about why: saying "only one legal card"
+would tell the table something about that player's hand that the card itself
+does not.
+
+Any seat nobody wants is played by the computer, at the strength the trainer's
+opponents use.
+
+**What this is not:** the key stops an idle poke, not a determined child. Anyone
+can watch which icon you tap, and the "I forgot my key" button lets a new key be
+set — visibly, since the real owner's key then stops working. It is a latch, not
+a lock.
+
+
 **Play it: https://spades-trainer.vercel.app**
 
 A playable game of spades that grades every decision you make.
