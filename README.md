@@ -23,10 +23,20 @@ table may see anyway. That is partly space (the keypad is tapped forty-odd times
 a hand and must never need scrolling to) and partly discretion — less of the
 board is on show over somebody's shoulder.
 
-A card that is the only legal one is not a decision, so it plays itself and the
-phone stays put. Nothing is announced about why: saying "only one legal card"
-would tell the table something about that player's hand that the card itself
-does not.
+**Nobody's turn is ever skipped**, even when the hand plays itself. An earlier
+version auto-played a card that was the only legal one, reasoning that it was
+not a decision and so did not need the phone. That was wrong, and a player
+caught it: the skip is itself the signal. If the phone never reaches you, the
+table learns you held exactly one legal card — something nobody knows at a real
+table. Every player now takes every turn, which is also why each one touches the
+phone exactly fourteen times a hand, thirteen plays and a bid, no matter what
+they were dealt.
+
+**A finished trick is not cleared on a timer.** Whoever played the fourth card is
+holding the phone, so a trick that fades after a second and a half is a trick
+only one player ever saw. It waits to be dismissed, naming who played what and
+who took it, so the phone can go round before the next trick starts. At the end
+of the hand the whole thing can be replayed trick by trick.
 
 Any seat nobody wants is played by the computer, at the strength the trainer's
 opponents use.

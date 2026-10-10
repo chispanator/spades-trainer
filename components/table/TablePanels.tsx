@@ -1,9 +1,11 @@
 'use client';
 
-import { Seat } from '@/lib/spades/cards';
+import { useState } from 'react';
+
+import { SUIT_NAME, Seat, suitOf } from '@/lib/spades/cards';
 import { GameState, HandResult } from '@/lib/spades/game';
 import { TEAM_SEATS, TableRoster, teamName } from '@/lib/spades/table';
-import { PlayingCard } from '@/components/PlayingCard';
+import { CardChip, PlayingCard } from '@/components/PlayingCard';
 
 export function TableScore({ game, roster }: { game: GameState; roster: TableRoster }) {
   return (
@@ -144,6 +146,8 @@ export function TableHandSummary({
         ))}
       </div>
 
+      {result.tricks.length > 0 && <HandReplay result={result} roster={roster} />}
+
       <button
         type="button"
         onClick={onNext}
@@ -198,6 +202,120 @@ export function HandoffStrip({ game, roster }: { game: GameState; roster: TableR
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A finished trick, held until somebody says it has been seen.
+ *
+ * Whoever played the fourth card is holding the phone, so clearing the trick on
+ * a timer shows it to exactly one player. This waits, and names who played what
+ * so the phone can go round the table before the next trick starts.
+ */
+export function TrickReview({
+  game,
+  roster,
+  onNext,
+}: {
+  game: GameState;
+  roster: TableRoster;
+  onNext: () => void;
+}) {
+  const winner = game.trickWinnerSeat;
+  const lead = game.trick.length ? suitOf(game.trick[0].card) : null;
+  const last = game.hands.every((h) => h.length === 0);
+
+  return (
+    <div className="panel-rise rounded-2xl bg-[#132520] p-4 ring-1 ring-white/10">
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-sm font-semibold">
+          Trick {game.completedTricks.length + 1}
+          {lead !== null && (
+            <span className="ml-1 font-normal text-[color:var(--muted)]">
+              · {SUIT_NAME[lead].toLowerCase()} led
+            </span>
+          )}
+        </h2>
+        {winner !== null && (
+          <span className="text-sm font-semibold text-[color:var(--accent)]">
+            {roster.seats[winner].name} takes it
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 flex justify-between gap-1">
+        {game.trick.map((tc) => (
+          <span key={tc.card} className="flex flex-1 flex-col items-center gap-1">
+            <PlayingCard
+              card={tc.card}
+              size="sm"
+              highlight={winner === tc.seat ? 'winner' : null}
+            />
+            <span className="w-full truncate text-center text-[11px] text-[color:var(--muted)]">
+              {roster.seats[tc.seat].name}
+            </span>
+          </span>
+        ))}
+      </div>
+
+      <p className="mt-3 text-center text-xs text-[color:var(--muted)]">
+        Show everyone before you tap on.
+      </p>
+
+      <button
+        type="button"
+        onClick={onNext}
+        className="mt-2 w-full rounded-xl bg-[color:var(--accent)] px-4 py-3 text-base font-semibold text-black transition hover:brightness-110"
+      >
+        {last ? 'Everyone has seen it — score the hand' : 'Everyone has seen it — next trick'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The whole hand, trick by trick, once it is over. Nothing here is secret any
+ * more, so it is the one moment the table can go back over what happened and
+ * argue about it.
+ */
+function HandReplay({ result, roster }: { result: HandResult; roster: TableRoster }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="mt-3 border-t border-white/10 pt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full rounded-xl bg-white/10 px-4 py-2.5 text-sm font-medium transition hover:bg-white/20"
+      >
+        {open ? 'Hide the hand' : 'Look back over the hand'}
+      </button>
+
+      {open && (
+        <ol className="mt-3 space-y-2">
+          {result.tricks.map((t, i) => (
+            <li key={i} className="rounded-xl bg-white/5 p-2">
+              <div className="flex items-baseline justify-between text-[11px] text-[color:var(--muted)]">
+                <span>trick {i + 1}</span>
+                <span className="font-medium text-[color:var(--accent)]">
+                  {roster.seats[t.winner].name}
+                </span>
+              </div>
+              <div className="mt-1 flex justify-between gap-1">
+                {t.cards.map((tc) => (
+                  <span key={tc.card} className="flex flex-1 flex-col items-center gap-0.5">
+                    <CardChip card={tc.card} className="text-[10px]" />
+                    <span className="w-full truncate text-center text-[10px] text-[color:var(--muted)]">
+                      {roster.seats[tc.seat].name}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

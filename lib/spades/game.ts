@@ -93,6 +93,8 @@ export interface HandResult {
   bagsEarned: [number, number];
   totals: [number, number];
   madeContract: [boolean, boolean];
+  /** Every trick of the hand, in order, so it can be replayed afterwards. */
+  tricks: { cards: TrickCard[]; winner: Seat }[];
   reviews: PlayReview[];
   bidReview: BidReview | null;
 }
@@ -402,6 +404,7 @@ function finishHand(g: GameState): GameState {
       a.madeContract && a.nilResults.every((r) => r.made),
       b.madeContract && b.nilResults.every((r) => r.made),
     ],
+    tricks: n.completedTricks.map((t) => ({ cards: t.cards.slice(), winner: t.winner })),
     reviews: n.reviews.slice(),
     bidReview: n.bidReview,
   };

@@ -139,7 +139,7 @@ export function GameTable({
             <p className="absolute inset-0 grid place-items-center text-xs text-white/30">bidding</p>
           )}
           {game.phase === 'trickComplete' && winner !== null && (
-            <p className="absolute bottom-1 right-2 text-[11px] font-medium text-[color:var(--accent)]">
+            <p className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-[color:var(--accent)]">
               {winner === viewSeat ? 'you take it' : `${nameOf(winner)} takes it`}
             </p>
           )}

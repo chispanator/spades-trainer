@@ -28,12 +28,11 @@ import {
   HandoffStrip,
   TableBidPad,
   TableHandSummary,
+  TrickReview,
   TableScore,
 } from '@/components/table/TablePanels';
 
 const AI_DELAY = 650;
-const FORCED_DELAY = 550;
-const TRICK_HOLD = 1700;
 
 type Screen = 'landing' | 'setup' | 'playing';
 
@@ -80,35 +79,16 @@ export default function TablePage() {
   }, [game, roster, busy]);
 
   /*
-    A card that is the only legal one is not a decision, so the phone does not
-    need to move for it. Nothing is announced about why: saying "only one legal
-    card" would tell the table something about that player's hand that the card
-    itself does not.
-  */
-  useEffect(() => {
-    if (!game || !roster || busy || unlocked) return;
-    if (game.phase !== 'playing' || roster.seats[game.turn].isAI) return;
-    const legal = legalFor(game, game.turn);
-    if (legal.length !== 1) return;
-    const seat = game.turn;
-    const t = setTimeout(() => {
-      setGame((g) => {
-        if (!g || g.phase !== 'playing' || g.turn !== seat) return g;
-        const only = legalFor(g, seat);
-        return only.length === 1 ? playCard(g, only[0]) : g;
-      });
-    }, FORCED_DELAY);
-    return () => clearTimeout(t);
-  }, [game, roster, busy, unlocked]);
+    There is deliberately no auto-play for a forced card here, though the solo
+    trainer can afford one. Skipping a player's turn is itself a signal: if the
+    phone never reaches you, the table learns you held exactly one legal card.
+    At a real table nobody knows that, so everyone takes every turn, even when
+    the hand plays itself.
 
-  // ---- a finished trick sits on the table for a moment; it is public ----
-  useEffect(() => {
-    if (!game || busy || game.phase !== 'trickComplete') return;
-    const t = setTimeout(() => {
-      setGame((g) => (g && g.phase === 'trickComplete' ? resolveTrick(g) : g));
-    }, TRICK_HOLD);
-    return () => clearTimeout(t);
-  }, [game, busy]);
+    A finished trick is not cleared on a timer either. Whoever played the fourth
+    card is holding the phone, so a trick that vanishes after a second and a half
+    is a trick only one player ever saw. It waits to be dismissed instead.
+  */
 
   const handlePlay = useCallback(
     (card: Card) => {
@@ -201,8 +181,6 @@ export default function TablePage() {
     app ignoring you. Nothing is said about why; the card landing is all the
     table sees, exactly as if the player had chosen it.
   */
-  const forcedPlay =
-    game.phase === 'playing' && !seatIsAI && legalFor(game, turn).length === 1;
   const viewSeat = unlocked && myTurnHuman ? turn : null;
   const legal = game.phase === 'playing' && unlocked ? legalFor(game, turn) : [];
   const restrictionNote =
@@ -218,7 +196,7 @@ export default function TablePage() {
     handoff gets its own screen: a compact strip of what the table may see, and
     the keys. The full board comes back the moment the hand is open.
   */
-  const awaitingKey = myTurnHuman && !unlocked && !forcedPlay && rekeying === null;
+  const awaitingKey = myTurnHuman && !unlocked && rekeying === null;
   if (awaitingKey) {
     return (
       <main className="mx-auto w-full max-w-md px-3 py-4">
@@ -301,6 +279,14 @@ export default function TablePage() {
           />
         ) : (
           <>
+            {game.phase === 'trickComplete' && (
+              <TrickReview
+                game={game}
+                roster={roster}
+                onNext={() => setGame(resolveTrick(game))}
+              />
+            )}
+
             {unlocked && game.phase === 'bidding' && (
               <TableBidPad
                 name={player.name}
