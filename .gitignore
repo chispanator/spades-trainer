@@ -42,3 +42,7 @@ next-env.d.ts
 
 # netlify cli local state and its cached build plugins
 .netlify/
+
+# Netlify CLI drops its own Claude skills in here on init; useful locally,
+# but not part of this project.
+.claude/skills/
