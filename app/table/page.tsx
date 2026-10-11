@@ -115,7 +115,7 @@ export default function TablePage() {
     return (
       <main className="mx-auto grid min-h-dvh w-full max-w-md place-items-center px-4 py-10">
         <div className="w-full">
-          <h1 className="text-3xl font-semibold tracking-tight">Spades at the Table</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Round the Table</h1>
           <p className="mt-2 text-sm text-[color:var(--foreground)]/80">
             One phone, passed around. Everyone picks a secret key at the start, and your hand
             only appears when your own key is tapped — so the phone can go round the table
@@ -219,7 +219,7 @@ export default function TablePage() {
   return (
     <main className="mx-auto w-full max-w-md px-3 py-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-base font-semibold tracking-tight">Spades at the Table</h1>
+        <h1 className="text-base font-semibold tracking-tight">Round the Table</h1>
         <div className="flex items-center gap-2">
           <button
             type="button"

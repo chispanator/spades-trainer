@@ -1,12 +1,18 @@
-# Spades Trainer
+# Spadework
 
 Two apps over one engine:
 
-- **`/`** — the solo trainer, where every bid and card you play is graded.
-- **`/table`** — pass-and-play spades for a single phone, for a family that has
-  no cards to hand.
+- **`/`** — **Spadework**, the solo trainer, where every bid and every card you
+  play is graded.
+- **`/table`** — **Round the Table**, pass-and-play spades for a single phone,
+  for a family with no cards to hand.
 
-## Spades at the Table
+Installable: `app/manifest.ts` and the icons make it a home-screen app that opens
+without browser chrome. `node scripts/make-icons.mjs` redraws every size from the
+one spade in that script — the maskable Android icon keeps the spade inside the
+middle 80%, and the iOS icon is full bleed because iOS rounds the corners itself.
+
+## Round the Table
 
 One phone goes round the table. Each player chooses a secret key at setup — an
 icon, picked in private, that nobody else sees — and their hand only appears

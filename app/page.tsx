@@ -227,7 +227,7 @@ export default function Page() {
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Spades Trainer</h1>
+            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Spadework</h1>
             <ModeSwitch
               current="trainer"
               size="compact"

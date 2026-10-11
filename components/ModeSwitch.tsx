@@ -4,8 +4,8 @@ import Link from 'next/link';
 import { useState } from 'react';
 
 const MODES = [
-  { key: 'trainer', href: '/', label: 'Solo trainer', blurb: 'Play alone and be graded' },
-  { key: 'table', href: '/table', label: 'Pass the phone', blurb: 'Play together on one phone' },
+  { key: 'trainer', href: '/', label: 'Spadework', blurb: 'Drill alone and get graded' },
+  { key: 'table', href: '/table', label: 'Round the Table', blurb: 'One phone, the whole family' },
 ] as const;
 
 type ModeKey = (typeof MODES)[number]['key'];

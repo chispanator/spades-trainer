@@ -360,7 +360,7 @@ export function StartScreen({
   return (
     <main className="mx-auto grid min-h-dvh w-full max-w-lg place-items-center px-4 py-10">
       <div className="w-full">
-        <h1 className="text-3xl font-semibold tracking-tight">Spades Trainer</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Spadework</h1>
         <p className="mt-2 text-sm text-[color:var(--foreground)]/80">
           Play a full game of spades against three simulated opponents. After every card you play,
           the same engine deals out thousands of hands the opposition could be holding and tells you
