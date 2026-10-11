@@ -1,0 +1,16 @@
+# The app is exported as plain static files (see next.config.ts), so Netlify
+# serves it straight from a CDN: no Next.js runtime, no functions, nothing to
+# cold-start. `out` is where `next build` puts the export.
+[build]
+  command = "npm run build"
+  publish = "out"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Hashed build assets are immutable; the icons and manifest are not, so they
+# keep the default so a redrawn icon is picked up.
+[[headers]]
+  for = "/_next/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

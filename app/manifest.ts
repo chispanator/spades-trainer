@@ -1,5 +1,8 @@
 import type { MetadataRoute } from 'next';
 
+/** The manifest never varies, and a static export will not emit it without this. */
+export const dynamic = 'force-static';
+
 /**
  * Makes the app installable, which is how it ends up on a phone's home screen.
  * `standalone` drops the browser chrome, so a hand of cards gets the whole
